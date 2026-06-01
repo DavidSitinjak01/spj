@@ -97,23 +97,30 @@ async function getBlobModule() {
 
 /**
  * Upload a file to Vercel Blob storage.
+ * Uses private access since the Blob store is configured as private.
  */
-export async function uploadToBlob(fileName: string, buffer: Buffer): Promise<{ url: string }> {
+export async function uploadToBlob(fileName: string, buffer: Buffer, contentType?: string): Promise<{ url: string }> {
   const { put } = await getBlobModule();
   const blob = await put(`${BLOB_PREFIX}${fileName}`, buffer, {
-    access: 'public',
-    contentType: 'application/pdf',
+    access: 'private',
+    contentType: contentType || 'application/pdf',
   });
   return { url: blob.url };
 }
 
 /**
  * Download a file from Vercel Blob storage.
+ * For private blobs, uses the BLOB_READ_WRITE_TOKEN for authentication.
  */
 export async function downloadFromBlob(url: string): Promise<Buffer> {
-  const response = await fetch(url);
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const response = await fetch(url, { headers });
   if (!response.ok) {
-    throw new Error(`Failed to download from blob: ${response.statusText}`);
+    throw new Error(`Failed to download from blob: ${response.status} ${response.statusText}`);
   }
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer);
