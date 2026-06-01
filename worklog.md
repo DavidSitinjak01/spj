@@ -68,3 +68,41 @@ Stage Summary:
 - Each doc type sub-tab shows per-item view with upload/replace/delete per spending item
 - Completeness tracked via completenessMap from API
 - page.tsx: ~2868 lines
+
+---
+Task ID: 4
+Agent: full-stack-developer
+Task: Redesign SPJ 5 sub-tabs from Upload to Generated/Printable Documents
+
+Work Log:
+- Removed upload-related state variables: spjDocs, spjDocsCompleteness, spjDocsStats, spjDocsLoading, spjDocUploading, spjUploadTarget, spjDocFileRef
+- Added new state: spjDocFields (nomorSurat, tanggalSurat, kepalaSekolah, nipKepala, bendahara, nipBendahara, komiteSekolah, nipKomite, namaToko, alamatToko, picToko, pemeriksa, nipPemeriksa)
+- Removed upload functions: loadSPJDocs, handleSPJDocUpload, deleteSPJDoc, formatFileSize
+- Added handlePrintDoc function and useEffect for initializing doc fields from RKAS/BKU data
+- Removed loadSPJDocs() from initial useEffect
+- Added Printer icon import (replaced unused Circle icon)
+- Removed SPJDocument interface (no longer needed)
+- Removed FolderOpen import (no longer used)
+- Simplified sub-tab navigation (removed completeness badges)
+- Removed Kelengkapan SPJ Summary Card from Rekapitulasi sub-tab
+- Removed Kelengkapan SPJ column and upload buttons from detail table in Rekapitulasi
+- Implemented 5 generated/printable document sub-tabs:
+  1. Surat Pesanan - Order letter with school letterhead, procurement table from RKAS+BKU data
+  2. Surat Balasan Toko - Store reply letter with toko letterhead, confirmation table
+  3. BAST - Berita Acara Serah Terima with handover items table, conditions, komite signature
+  4. Dokumen Perencanaan - Planning document with 4 sections (Pendahuluan, Rencana Anggaran, Alokasi per Standar, Rincian Belanja)
+  5. Surat Hasil Pemeriksaan - Inspection result letter with 4 sections (Keuangan, Kecocokan RKAS, Temuan, Kesimpulan)
+- Each document has: A4 paper-like preview, editable fields section, "Cetak Dokumen" button
+- Documents auto-populate from RKAS+BKU data (school info, standar groups, items)
+- Added print CSS to globals.css (@media print with #print-area)
+- Added hidden #print-area div for printing document content
+- Verified lint passes and dev server runs successfully
+
+Stage Summary:
+- SPJ 5 sub-tabs completely redesigned from upload slots to generated/printable documents
+- Documents formatted like official Indonesian school accountability documents
+- A4 paper-like preview with Times New Roman font, proper letterhead, tables, and signatures
+- Editable fields persist across sub-tab switches
+- Print functionality uses CSS @media print to show only document content
+- Rekapitulasi sub-tab preserved (removed upload-related elements only)
+- page.tsx reduced from ~2868 to ~2700 lines (less code, more functionality)
