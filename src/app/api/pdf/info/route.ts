@@ -22,6 +22,13 @@ export async function GET(request: Request) {
       extractedText: info.extractedText,
     });
   } catch (error: any) {
+    // If file not found, return 404 instead of 500 so the client can handle gracefully
+    if (error.message?.includes('not found')) {
+      return NextResponse.json(
+        { error: 'PDF file not found', notFound: true },
+        { status: 404 }
+      );
+    }
     console.error('PDF info error:', error);
     return NextResponse.json(
       { error: error.message || 'Failed to process PDF' },

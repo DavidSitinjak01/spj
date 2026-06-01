@@ -151,21 +151,48 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadPDF('rapbs-all-output.pdf'); loadBKU(); loadRKAS(); loadBKUPajak() }, [])
+  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
 
-  const loadPDF = async (fileName: string) => {
-    setLoading(true); setError(null)
+  const loadAvailablePDF = async () => {
+    setLoading(true)
+    try {
+      // First check what PDFs are available
+      const listRes = await fetch('/api/pdf/info')
+      if (listRes.ok) {
+        const listData = await listRes.json()
+        const files: string[] = listData.files || []
+        if (files.length > 0) {
+          // Load the first available PDF
+          await loadPDF(files[0], true)
+        }
+      }
+    } catch {
+      // Silently ignore - no PDF available is a valid state
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadPDF = async (fileName: string, skipError = false) => {
+    setLoading(true); if (!skipError) setError(null)
     try {
       const res = await fetch(`/api/pdf/info?file=${encodeURIComponent(fileName)}`)
+      if (res.status === 404) {
+        // File not found - this is not an error if we're just checking
+        if (!skipError) setError('File PDF tidak ditemukan')
+        return
+      }
       if (!res.ok) throw new Error('Gagal memuat PDF')
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100)
       generateSummary(fileName)
       extractBudget(fileName)
-    } catch (err: any) { setError(err.message) } finally { setLoading(false) }
+    } catch (err: any) {
+      if (!skipError) setError(err.message)
+    } finally { setLoading(false) }
   }
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
