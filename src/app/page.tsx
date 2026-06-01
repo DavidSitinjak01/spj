@@ -3547,7 +3547,7 @@ export default function Home() {
                                           <p className="font-bold underline">{toko?.direktur || '........................'}</p>
                                           <p>Direktur</p>
                                         </div>
-                                        <div className="text-right">
+                                        <div className="text-left">
                                           <p>Telukdalam, {tglPesan ? formatTanggalShort(tglPesan) : '............'}</p>
                                           <p className="mt-1">Pelaksana,</p>
                                           <div className="h-16" />
