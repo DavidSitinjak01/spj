@@ -11,13 +11,21 @@ if (!fs.existsSync(path.dirname(CACHE_FILE))) fs.mkdirSync(path.dirname(CACHE_FI
 // --- Types ---
 export type SPJDocType = 'surat-pesanan' | 'surat-balasan' | 'bast' | 'dokumen-perencanaan' | 'surat-hasil-pemeriksaan';
 
+// Each document is linked to a specific spending item (from RKAS+BKU matching)
 export interface SPJDocument {
   id: string;
   type: SPJDocType;
   fileName: string;
   originalName: string;
+  // Link to spending item
+  itemKey: string;        // compositeKey: normalizeKode(kodeProgram)|normalizeKode(kodeRekening)
+  kodeRekening: string;
+  kodeProgram: string;
+  uraian: string;          // description of the spending item
+  // Period
   bulan: string;
   tahun: string;
+  // Metadata
   deskripsi: string;
   tanggalUpload: string;
   fileSize: number;
@@ -30,6 +38,8 @@ const DOC_TYPE_LABELS: Record<SPJDocType, string> = {
   'dokumen-perencanaan': 'Dokumen Perencanaan',
   'surat-hasil-pemeriksaan': 'Surat Hasil Pemeriksaan',
 };
+
+const ALL_DOC_TYPES = Object.keys(DOC_TYPE_LABELS) as SPJDocType[];
 
 function loadDocs(): SPJDocument[] {
   try {
@@ -48,65 +58,97 @@ function generateId(): string {
   return `spj-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// --- GET: List all SPJ documents ---
+// Build completeness map: itemKey -> { docType: doc }
+function buildCompletenessMap(docs: SPJDocument[]): Record<string, Record<SPJDocType, SPJDocument | null>> {
+  const map: Record<string, Record<SPJDocType, SPJDocument | null>> = {};
+  for (const doc of docs) {
+    if (!map[doc.itemKey]) {
+      map[doc.itemKey] = {
+        'surat-pesanan': null, 'surat-balasan': null, 'bast': null,
+        'dokumen-perencanaan': null, 'surat-hasil-pemeriksaan': null,
+      };
+    }
+    map[doc.itemKey][doc.type] = doc;
+  }
+  return map;
+}
+
+// --- GET: List all SPJ documents with completeness info ---
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') as SPJDocType | null;
     const bulan = searchParams.get('bulan');
     const tahun = searchParams.get('tahun');
+    const itemKey = searchParams.get('itemKey');
 
     let docs = loadDocs();
 
-    // Filter by type if specified
-    if (type) {
-      docs = docs.filter(d => d.type === type);
-    }
-    if (bulan) {
-      docs = docs.filter(d => d.bulan === bulan);
-    }
-    if (tahun) {
-      docs = docs.filter(d => d.tahun === tahun);
-    }
+    // Filter
+    if (type) docs = docs.filter(d => d.type === type);
+    if (bulan) docs = docs.filter(d => d.bulan === bulan);
+    if (tahun) docs = docs.filter(d => d.tahun === tahun);
+    if (itemKey) docs = docs.filter(d => d.itemKey === itemKey);
 
     // Sort by date (newest first)
     docs.sort((a, b) => new Date(b.tanggalUpload).getTime() - new Date(a.tanggalUpload).getTime());
 
-    // Also return summary counts per type
+    // Build completeness map from ALL docs (not filtered)
     const allDocs = loadDocs();
-    const summary: Record<string, { count: number; totalSize: number; months: string[] }> = {};
-    for (const dt of Object.keys(DOC_TYPE_LABELS) as SPJDocType[]) {
+    const completenessMap = buildCompletenessMap(allDocs);
+
+    // Summary per type
+    const summary: Record<string, { count: number; totalSize: number; itemKeys: string[] }> = {};
+    for (const dt of ALL_DOC_TYPES) {
       const typeDocs = allDocs.filter(d => d.type === dt);
-      const months = [...new Set(typeDocs.map(d => `${d.bulan} ${d.tahun}`))];
       summary[dt] = {
         count: typeDocs.length,
         totalSize: typeDocs.reduce((s, d) => s + d.fileSize, 0),
-        months,
+        itemKeys: [...new Set(typeDocs.map(d => d.itemKey))],
       };
     }
 
-    return NextResponse.json({ docs, summary, typeLabels: DOC_TYPE_LABELS });
+    // Count items with complete vs incomplete docs
+    const totalItems = Object.keys(completenessMap).length;
+    const completeItems = Object.values(completenessMap).filter(
+      itemDocs => ALL_DOC_TYPES.every(dt => itemDocs[dt] !== null)
+    ).length;
+
+    return NextResponse.json({
+      docs,
+      summary,
+      completenessMap,
+      typeLabels: DOC_TYPE_LABELS,
+      stats: { totalItems, completeItems, incompleteItems: totalItems - completeItems },
+    });
   } catch (error: any) {
     console.error('SPJ docs GET error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// --- POST: Upload new SPJ document ---
+// --- POST: Upload SPJ document linked to a spending item ---
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const type = formData.get('type') as SPJDocType;
-    const bulan = formData.get('bulan') as string || '';
-    const tahun = formData.get('tahun') as string || '';
-    const deskripsi = formData.get('deskripsi') as string || '';
+    const bulan = (formData.get('bulan') as string) || '';
+    const tahun = (formData.get('tahun') as string) || '';
+    const deskripsi = (formData.get('deskripsi') as string) || '';
+    const itemKey = (formData.get('itemKey') as string) || '';
+    const kodeRekening = (formData.get('kodeRekening') as string) || '';
+    const kodeProgram = (formData.get('kodeProgram') as string) || '';
+    const uraian = (formData.get('uraian') as string) || '';
 
     if (!file) {
       return NextResponse.json({ error: 'File tidak ditemukan' }, { status: 400 });
     }
     if (!type || !DOC_TYPE_LABELS[type]) {
       return NextResponse.json({ error: 'Tipe dokumen tidak valid' }, { status: 400 });
+    }
+    if (!itemKey) {
+      return NextResponse.json({ error: 'Item key diperlukan (pilih pos belanja)' }, { status: 400 });
     }
 
     // Generate unique filename
@@ -120,11 +162,9 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes);
     fs.writeFileSync(filePath, buffer);
 
-    // Check for duplicate (same type + bulan + tahun)
+    // Check for duplicate (same type + itemKey) — one doc per type per item
     const docs = loadDocs();
-    const duplicateIdx = docs.findIndex(d =>
-      d.type === type && d.bulan === bulan && d.tahun === tahun && bulan && tahun
-    );
+    const duplicateIdx = docs.findIndex(d => d.type === type && d.itemKey === itemKey);
 
     let replaced = false;
     if (duplicateIdx >= 0) {
@@ -142,6 +182,8 @@ export async function POST(request: Request) {
         deskripsi: deskripsi || oldDoc.deskripsi,
         tanggalUpload: new Date().toISOString(),
         fileSize: file.size,
+        bulan: bulan || oldDoc.bulan,
+        tahun: tahun || oldDoc.tahun,
       };
       replaced = true;
     } else {
@@ -151,6 +193,10 @@ export async function POST(request: Request) {
         type,
         fileName: safeName,
         originalName: file.name,
+        itemKey,
+        kodeRekening,
+        kodeProgram,
+        uraian,
         bulan,
         tahun,
         deskripsi,

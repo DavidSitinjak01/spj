@@ -18,7 +18,7 @@ import {
   Search, TrendingUp, Wallet, GraduationCap, Wrench, Monitor, FileSpreadsheet,
   ChevronDown, ArrowUpRight, ArrowDownRight, Info,
   Receipt, FilePlus2, ArrowRight, Minus, Plus, FolderOpen, Trash2, ClipboardList,
-  Scale, Package, Store, FileCheck, ClipboardPaste, ShieldCheck,
+  Scale, Package, Store, FileCheck, ClipboardPaste, ShieldCheck, Circle,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -82,6 +82,7 @@ interface SPJSummary {
 type SPJDocType = 'surat-pesanan' | 'surat-balasan' | 'bast' | 'dokumen-perencanaan' | 'surat-hasil-pemeriksaan'
 interface SPJDocument {
   id: string; type: SPJDocType; fileName: string; originalName: string;
+  itemKey: string; kodeRekening: string; kodeProgram: string; uraian: string;
   bulan: string; tahun: string; deskripsi: string; tanggalUpload: string; fileSize: number;
 }
 
@@ -117,6 +118,10 @@ interface BudgetData {
 // --- Helpers ---
 const fmt = (n: number) => new Intl.NumberFormat('id-ID').format(n)
 const fmtRp = (n: number) => `Rp ${fmt(n)}`
+
+const normalizeKode = (kode: string): string => kode.replace(/[\s\n\r]/g, '').replace(/\.+$/, '').trim()
+const compositeKey = (kodeProgram: string, kodeRekening: string): string =>
+  `${normalizeKode(kodeProgram)}|${normalizeKode(kodeRekening)}`
 
 const CHART_COLORS = ['#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
 
@@ -177,17 +182,13 @@ export default function Home() {
   const [selectedSpjMonth, setSelectedSpjMonth] = useState<number>(-1) // -1 = tahunan view
   const [spjSearchTerm, setSpjSearchTerm] = useState('')
   const [spjDocs, setSpjDocs] = useState<SPJDocument[]>([])
-  const [spjDocsSummary, setSpjDocsSummary] = useState<Record<string, { count: number; totalSize: number; months: string[] }>>({})
+  const [spjDocsCompleteness, setSpjDocsCompleteness] = useState<Record<string, Record<SPJDocType, SPJDocument | null>>>({})
+  const [spjDocsStats, setSpjDocsStats] = useState<{ totalItems: number; completeItems: number; incompleteItems: number } | null>(null)
   const [spjDocsLoading, setSpjDocsLoading] = useState(false)
   const [spjDocUploading, setSpjDocUploading] = useState<SPJDocType | null>(null)
   const [spjSubTab, setSpjSubTab] = useState('rekapitulasi')
-  const [spjDocBulan, setSpjDocBulan] = useState('')
-  const [spjDocTahun, setSpjDocTahun] = useState('')
-  const [spjDocDeskripsi, setSpjDocDeskripsi] = useState('')
-  const spjDocFileRefs = useRef<Record<SPJDocType, HTMLInputElement | null>>({
-    'surat-pesanan': null, 'surat-balasan': null, 'bast': null,
-    'dokumen-perencanaan': null, 'surat-hasil-pemeriksaan': null,
-  })
+  const [spjUploadTarget, setSpjUploadTarget] = useState<{ itemKey: string; kodeRekening: string; kodeProgram: string; uraian: string; type: SPJDocType } | null>(null)
+  const spjDocFileRef = useRef<HTMLInputElement>(null)
   const [toastMessages, setToastMessages] = useState<{ id: number; message: string; type: 'info' | 'warning' | 'success' }[]>([])
   const bkuFileInputRef = useRef<HTMLInputElement>(null)
   const rkasFileInputRef = useRef<HTMLInputElement>(null)
@@ -428,21 +429,29 @@ export default function Home() {
       if (res.ok) {
         const data = await res.json()
         setSpjDocs(data.docs || [])
-        setSpjDocsSummary(data.summary || {})
+        setSpjDocsCompleteness(data.completenessMap || {})
+        setSpjDocsStats(data.stats || null)
       }
     } catch {} finally { setSpjDocsLoading(false) }
   }
 
-  const handleSPJDocUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: SPJDocType) => {
+  const handleSPJDocUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return
-    setSpjDocUploading(type)
+    if (!spjUploadTarget) return
+    setSpjDocUploading(spjUploadTarget.type)
     try {
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('type', type)
-      formData.append('bulan', spjDocBulan)
-      formData.append('tahun', spjDocTahun)
-      formData.append('deskripsi', spjDocDeskripsi)
+      formData.append('type', spjUploadTarget.type)
+      formData.append('itemKey', spjUploadTarget.itemKey)
+      formData.append('kodeRekening', spjUploadTarget.kodeRekening)
+      formData.append('kodeProgram', spjUploadTarget.kodeProgram)
+      formData.append('uraian', spjUploadTarget.uraian)
+      const src = selectedSpjMonth === -1 ? spjData?.tahunan : spjData?.bulanan[selectedSpjMonth]
+      if (src) {
+        formData.append('bulan', 'bulan' in src ? (src as { bulan: string }).bulan : '')
+        formData.append('tahun', src.tahun)
+      }
       const res = await fetch('/api/pdf/spj-docs', { method: 'POST', body: formData })
       if (res.ok) {
         const result = await res.json()
@@ -452,16 +461,16 @@ export default function Home() {
           'surat-hasil-pemeriksaan': 'Surat Hasil Pemeriksaan',
         }
         if (result.replaced) {
-          addToast(`${typeLabels[type]} sudah ada. File lama diganti.`, 'warning')
+          addToast(`${typeLabels[spjUploadTarget.type]} berhasil diperbarui.`, 'warning')
         } else {
-          addToast(`${typeLabels[type]} berhasil diunggah.`, 'success')
+          addToast(`${typeLabels[spjUploadTarget.type]} berhasil diunggah.`, 'success')
         }
         await loadSPJDocs()
       }
     } catch {} finally {
       setSpjDocUploading(null)
-      const ref = spjDocFileRefs.current[type]
-      if (ref) ref.value = ''
+      setSpjUploadTarget(null)
+      if (spjDocFileRef.current) spjDocFileRef.current.value = ''
     }
   }
 
@@ -1395,37 +1404,69 @@ export default function Home() {
 
             {/* === SPJ TAB === */}
             <TabsContent value="spj" className="flex-1 m-0 min-h-0 overflow-auto">
+              {/* Hidden file input for SPJ doc uploads */}
+              <input
+                type="file"
+                ref={spjDocFileRef}
+                onChange={handleSPJDocUpload}
+                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                className="hidden"
+              />
+
               <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
                 {/* ===== Sub-Tab Navigation ===== */}
                 <div className="flex items-center gap-1 overflow-x-auto pb-1">
-                  {[
-                    { key: 'rekapitulasi', label: 'Rekapitulasi', icon: FileSpreadsheet, color: 'emerald' },
-                    { key: 'surat-pesanan', label: 'Surat Pesanan', icon: Package, color: 'teal' },
-                    { key: 'surat-balasan', label: 'Surat Balasan Toko', icon: Store, color: 'orange' },
-                    { key: 'bast', label: 'BAST', icon: FileCheck, color: 'emerald' },
-                    { key: 'dokumen-perencanaan', label: 'Dok. Perencanaan', icon: ClipboardPaste, color: 'violet' },
-                    { key: 'surat-hasil-pemeriksaan', label: 'Surat Hasil Periksa', icon: ShieldCheck, color: 'rose' },
-                  ].map(tab => {
-                    const isActive = spjSubTab === tab.key
-                    const docCount = tab.key !== 'rekapitulasi' ? (spjDocsSummary[tab.key]?.count || 0) : 0
-                    return (
-                      <Button
-                        key={tab.key}
-                        variant={isActive ? 'default' : 'outline'}
-                        size="sm"
-                        className={`h-7 text-[11px] gap-1 shrink-0 ${isActive && tab.key !== 'rekapitulasi' ? '' : ''}`}
-                        onClick={() => setSpjSubTab(tab.key)}
-                      >
-                        <tab.icon className="h-3 w-3" />
-                        {tab.label}
-                        {docCount > 0 && (
-                          <Badge variant="secondary" className="h-4 min-w-[16px] text-[9px] px-1 ml-0.5">
-                            {docCount}
-                          </Badge>
-                        )}
-                      </Button>
-                    )
-                  })}
+                  {(() => {
+                    const docTypeKeys: SPJDocType[] = ['surat-pesanan', 'surat-balasan', 'bast', 'dokumen-perencanaan', 'surat-hasil-pemeriksaan']
+                    const allItemKeys = spjData
+                      ? (selectedSpjMonth === -1
+                          ? spjData.tahunan?.standarGroups.flatMap(g => g.items) || []
+                          : spjData.bulanan[selectedSpjMonth]?.standarGroups.flatMap(g => g.items) || []
+                        )
+                      : []
+                    const totalItems = allItemKeys.length
+                    return [
+                      { key: 'rekapitulasi', label: 'Rekapitulasi', icon: FileSpreadsheet, color: 'emerald' },
+                      { key: 'surat-pesanan', label: 'Surat Pesanan', icon: Package, color: 'teal' },
+                      { key: 'surat-balasan', label: 'Surat Balasan Toko', icon: Store, color: 'orange' },
+                      { key: 'bast', label: 'BAST', icon: FileCheck, color: 'emerald' },
+                      { key: 'dokumen-perencanaan', label: 'Dok. Perencanaan', icon: ClipboardPaste, color: 'violet' },
+                      { key: 'surat-hasil-pemeriksaan', label: 'Surat Hasil Periksa', icon: ShieldCheck, color: 'rose' },
+                    ].map(tab => {
+                      const isActive = spjSubTab === tab.key
+                      const hasItems = tab.key !== 'rekapitulasi' && totalItems > 0
+                      const itemsWithDoc = hasItems
+                        ? allItemKeys.filter(item => {
+                            const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                            return spjDocsCompleteness[ik]?.[tab.key as SPJDocType] !== null &&
+                                   spjDocsCompleteness[ik]?.[tab.key as SPJDocType] !== undefined
+                          }).length
+                        : 0
+                      const docCount = hasItems ? spjDocs.filter(d => d.type === tab.key).length : 0
+                      return (
+                        <Button
+                          key={tab.key}
+                          variant={isActive ? 'default' : 'outline'}
+                          size="sm"
+                          className="h-7 text-[11px] gap-1 shrink-0"
+                          onClick={() => setSpjSubTab(tab.key)}
+                        >
+                          <tab.icon className="h-3 w-3" />
+                          {tab.label}
+                          {hasItems && (
+                            <Badge variant="secondary" className="h-4 min-w-[16px] text-[9px] px-1 ml-0.5">
+                              {itemsWithDoc}/{totalItems}
+                            </Badge>
+                          )}
+                          {!hasItems && docCount > 0 && (
+                            <Badge variant="secondary" className="h-4 min-w-[16px] text-[9px] px-1 ml-0.5">
+                              {docCount}
+                            </Badge>
+                          )}
+                        </Button>
+                      )
+                    })
+                  })()}
                 </div>
 
                 {/* ===== REKAPITULASI SUB-TAB ===== */}
@@ -1583,6 +1624,64 @@ export default function Home() {
                                 </div>
                               </CardContent>
                             </Card>
+
+                            {/* ===== Kelengkapan SPJ Summary Card ===== */}
+                            {(() => {
+                              const docTypeConfig: { key: SPJDocType; label: string; icon: any; colorClass: string }[] = [
+                                { key: 'surat-pesanan', label: 'SP', icon: Package, colorClass: 'text-teal-600 dark:text-teal-400' },
+                                { key: 'surat-balasan', label: 'SBT', icon: Store, colorClass: 'text-orange-600 dark:text-orange-400' },
+                                { key: 'bast', label: 'BAST', icon: FileCheck, colorClass: 'text-emerald-600 dark:text-emerald-400' },
+                                { key: 'dokumen-perencanaan', label: 'DP', icon: ClipboardPaste, colorClass: 'text-violet-600 dark:text-violet-400' },
+                                { key: 'surat-hasil-pemeriksaan', label: 'SHP', icon: ShieldCheck, colorClass: 'text-rose-600 dark:text-rose-400' },
+                              ]
+                              const allSpjItems = src.standarGroups.flatMap(g => g.items)
+                              const totalSpjItems = allSpjItems.length
+                              let completeCount = 0
+                              for (const item of allSpjItems) {
+                                const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                                const cm = spjDocsCompleteness[ik]
+                                if (cm && docTypeConfig.every(dt => cm[dt.key] !== null && cm[dt.key] !== undefined)) {
+                                  completeCount++
+                                }
+                              }
+                              const perTypeCounts = docTypeConfig.map(dt => {
+                                const count = allSpjItems.filter(item => {
+                                  const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                                  return spjDocsCompleteness[ik]?.[dt.key] !== null && spjDocsCompleteness[ik]?.[dt.key] !== undefined
+                                }).length
+                                return { ...dt, count }
+                              })
+                              return (
+                                <Card className="border-sky-200 dark:border-sky-800 bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-950/30 dark:to-blue-950/30">
+                                  <CardContent className="py-3 px-4 space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-medium flex items-center gap-1.5">
+                                        <FolderOpen className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+                                        Kelengkapan SPJ
+                                      </span>
+                                      <span className="text-xs font-bold text-sky-700 dark:text-sky-300">
+                                        {completeCount} dari {totalSpjItems} pos lengkap
+                                      </span>
+                                    </div>
+                                    <div className="h-2.5 bg-muted rounded-full overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full bg-gradient-to-r from-sky-400 to-blue-500 transition-all"
+                                        style={{ width: `${totalSpjItems > 0 ? Math.round((completeCount / totalSpjItems) * 100) : 0}%` }}
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-3 text-[10px] flex-wrap">
+                                      {perTypeCounts.map(dt => (
+                                        <span key={dt.key} className="flex items-center gap-1">
+                                          <dt.icon className={`h-3 w-3 ${dt.colorClass}`} />
+                                          <span className="font-medium">{dt.label}:</span>
+                                          <span>{dt.count}/{totalSpjItems}</span>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              )
+                            })()}
                           </>
                         )
                       })()}
@@ -1591,6 +1690,14 @@ export default function Home() {
                       {(() => {
                         const src = selectedSpjMonth === -1 ? spjData.tahunan : spjData.bulanan[selectedSpjMonth]
                         if (!src) return <div className="text-center py-8 text-muted-foreground text-sm">Pilih periode untuk melihat SPJ</div>
+
+                        const docTypeIcons: { key: SPJDocType; icon: any; colorClass: string }[] = [
+                          { key: 'surat-pesanan', icon: Package, colorClass: 'text-teal-500' },
+                          { key: 'surat-balasan', icon: Store, colorClass: 'text-orange-500' },
+                          { key: 'bast', icon: FileCheck, colorClass: 'text-emerald-500' },
+                          { key: 'dokumen-perencanaan', icon: ClipboardPaste, colorClass: 'text-violet-500' },
+                          { key: 'surat-hasil-pemeriksaan', icon: ShieldCheck, colorClass: 'text-rose-500' },
+                        ]
 
                         const filteredGroups = src.standarGroups.map(g => ({
                           ...g,
@@ -1679,43 +1786,92 @@ export default function Home() {
                                             <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Selisih</th>
                                             <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-14">%</th>
                                             <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-20">Status</th>
+                                            <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-[120px]">
+                                              <div className="flex flex-col items-center gap-0.5">
+                                                <span className="text-[9px]">Kelengkapan SPJ</span>
+                                                <div className="flex items-center gap-0.5">
+                                                  {docTypeIcons.map(dt => (
+                                                    <dt.icon key={dt.key} className={`h-3 w-3 ${dt.colorClass}`} />
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            </th>
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {group.items.map((item, idx) => (
-                                            <tr key={idx} className={`border-b last:border-0 ${item.status === 'lebih' ? 'bg-rose-50/50 dark:bg-rose-950/20' : item.status === 'lengkap' ? 'bg-emerald-50/30 dark:bg-emerald-950/10' : 'hover:bg-muted/50'}`}>
-                                              <td className="py-1.5 px-1 text-muted-foreground">{idx + 1}</td>
-                                              <td className="py-1.5 px-1 font-mono text-[10px] text-muted-foreground" title={item.kodeProgram}>{item.kodeProgram.length > 10 ? item.kodeProgram.slice(0, 10) + '…' : item.kodeProgram}</td>
-                                              <td className="py-1.5 px-1 font-mono text-[10px]">{item.kodeRekening}</td>
-                                              <td className="py-1.5 px-1 max-w-[180px]">
-                                                <div className="truncate" title={item.uraian}>{item.uraian}</div>
-                                                {item.jumlahItem > 1 && (
-                                                  <span className="text-[9px] text-muted-foreground">({item.jumlahItem} sub-item)</span>
-                                                )}
-                                                {item.uraianBKU && item.realisasi > 0 && (
-                                                  <div className="text-[9px] text-amber-600 dark:text-amber-400 truncate" title={`BKU: ${item.uraianBKU}`}>
-                                                    BKU: {item.uraianBKU}
+                                          {group.items.map((item, idx) => {
+                                            const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                                            const cm = spjDocsCompleteness[ik]
+                                            return (
+                                              <tr key={idx} className={`border-b last:border-0 ${item.status === 'lebih' ? 'bg-rose-50/50 dark:bg-rose-950/20' : item.status === 'lengkap' ? 'bg-emerald-50/30 dark:bg-emerald-950/10' : 'hover:bg-muted/50'}`}>
+                                                <td className="py-1.5 px-1 text-muted-foreground">{idx + 1}</td>
+                                                <td className="py-1.5 px-1 font-mono text-[10px] text-muted-foreground" title={item.kodeProgram}>{item.kodeProgram.length > 10 ? item.kodeProgram.slice(0, 10) + '…' : item.kodeProgram}</td>
+                                                <td className="py-1.5 px-1 font-mono text-[10px]">{item.kodeRekening}</td>
+                                                <td className="py-1.5 px-1 max-w-[180px]">
+                                                  <div className="truncate" title={item.uraian}>{item.uraian}</div>
+                                                  {item.jumlahItem > 1 && (
+                                                    <span className="text-[9px] text-muted-foreground">({item.jumlahItem} sub-item)</span>
+                                                  )}
+                                                  {item.uraianBKU && item.realisasi > 0 && (
+                                                    <div className="text-[9px] text-amber-600 dark:text-amber-400 truncate" title={`BKU: ${item.uraianBKU}`}>
+                                                      BKU: {item.uraianBKU}
+                                                    </div>
+                                                  )}
+                                                </td>
+                                                <td className="py-1.5 px-1 text-right font-medium text-emerald-700 dark:text-emerald-300">{fmtRp(item.anggaran)}</td>
+                                                <td className="py-1.5 px-1 text-right font-medium text-amber-700 dark:text-amber-300">{item.realisasi > 0 ? fmtRp(item.realisasi) : '-'}</td>
+                                                <td className={`py-1.5 px-1 text-right font-medium ${item.selisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{item.realisasi > 0 ? fmtRp(item.selisih) : '-'}</td>
+                                                <td className="py-1.5 px-1 text-center font-medium">{item.persenRealisasi > 0 ? `${item.persenRealisasi}%` : '-'}</td>
+                                                <td className="py-1.5 px-1 text-center">
+                                                  <Badge variant="outline" className={`text-[9px] h-4 px-1 ${
+                                                    item.status === 'lengkap' ? 'border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300' :
+                                                    item.status === 'sebagian' ? 'border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300' :
+                                                    item.status === 'lebih' ? 'border-rose-300 text-rose-700 dark:border-rose-700 dark:text-rose-300' :
+                                                    'border-red-200 text-red-500 dark:border-red-700 dark:text-red-300'
+                                                  }`}>
+                                                    {item.status === 'lengkap' ? 'Lengkap' :
+                                                     item.status === 'sebagian' ? 'Sebagian' :
+                                                     item.status === 'lebih' ? 'Lebih' : 'Belum'}
+                                                  </Badge>
+                                                </td>
+                                                <td className="py-1.5 px-1 text-center">
+                                                  <div className="flex items-center justify-center gap-0.5">
+                                                    {docTypeIcons.map(dt => {
+                                                      const docExists = cm?.[dt.key] !== null && cm?.[dt.key] !== undefined
+                                                      return (
+                                                        <button
+                                                          key={dt.key}
+                                                          className={`p-0.5 rounded transition-colors ${
+                                                            docExists
+                                                              ? 'text-emerald-500 hover:text-emerald-600'
+                                                              : 'text-gray-300 dark:text-gray-600 hover:text-gray-400 dark:hover:text-gray-400'
+                                                          }`}
+                                                          title={docExists ? `${dt.key} ✓` : `Unggah ${dt.key}`}
+                                                          onClick={() => {
+                                                            if (!docExists) {
+                                                              setSpjUploadTarget({
+                                                                itemKey: ik,
+                                                                kodeRekening: item.kodeRekening,
+                                                                kodeProgram: item.kodeProgram,
+                                                                uraian: item.uraian,
+                                                                type: dt.key,
+                                                              })
+                                                              setTimeout(() => spjDocFileRef.current?.click(), 0)
+                                                            }
+                                                          }}
+                                                        >
+                                                          {docExists
+                                                            ? <CheckCircle2 className="h-3.5 w-3.5" />
+                                                            : <Circle className="h-3.5 w-3.5" />
+                                                          }
+                                                        </button>
+                                                      )
+                                                    })}
                                                   </div>
-                                                )}
-                                              </td>
-                                              <td className="py-1.5 px-1 text-right font-medium text-emerald-700 dark:text-emerald-300">{fmtRp(item.anggaran)}</td>
-                                              <td className="py-1.5 px-1 text-right font-medium text-amber-700 dark:text-amber-300">{item.realisasi > 0 ? fmtRp(item.realisasi) : '-'}</td>
-                                              <td className={`py-1.5 px-1 text-right font-medium ${item.selisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{item.realisasi > 0 ? fmtRp(item.selisih) : '-'}</td>
-                                              <td className="py-1.5 px-1 text-center font-medium">{item.persenRealisasi > 0 ? `${item.persenRealisasi}%` : '-'}</td>
-                                              <td className="py-1.5 px-1 text-center">
-                                                <Badge variant="outline" className={`text-[9px] h-4 px-1 ${
-                                                  item.status === 'lengkap' ? 'border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300' :
-                                                  item.status === 'sebagian' ? 'border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300' :
-                                                  item.status === 'lebih' ? 'border-rose-300 text-rose-700 dark:border-rose-700 dark:text-rose-300' :
-                                                  'border-red-200 text-red-500 dark:border-red-700 dark:text-red-300'
-                                                }`}>
-                                                  {item.status === 'lengkap' ? 'Lengkap' :
-                                                   item.status === 'sebagian' ? 'Sebagian' :
-                                                   item.status === 'lebih' ? 'Lebih' : 'Belum'}
-                                                </Badge>
-                                              </td>
-                                            </tr>
-                                          ))}
+                                                </td>
+                                              </tr>
+                                            )
+                                          })}
                                         </tbody>
                                       </table>
                                     </div>
@@ -1808,24 +1964,31 @@ export default function Home() {
                   )
                 )}
 
-                {/* ===== DOCUMENT MANAGEMENT SUB-TABS ===== */}
+                {/* ===== DOCUMENT TYPE SUB-TABS (per-item view) ===== */}
                 {spjSubTab !== 'rekapitulasi' && (() => {
                   const docType = spjSubTab as SPJDocType
-                  const docTypeConfig: Record<SPJDocType, { label: string; icon: any; color: string; bgClass: string; borderClass: string; textClass: string; iconTextClass: string }> = {
-                    'surat-pesanan': { label: 'Surat Pesanan', icon: Package, color: 'teal', bgClass: 'bg-teal-50 dark:bg-teal-950/30', borderClass: 'border-teal-200 dark:border-teal-800', textClass: 'text-teal-700 dark:text-teal-300', iconTextClass: 'text-teal-600 dark:text-teal-400' },
-                    'surat-balasan': { label: 'Surat Balasan Toko', icon: Store, color: 'orange', bgClass: 'bg-orange-50 dark:bg-orange-950/30', borderClass: 'border-orange-200 dark:border-orange-800', textClass: 'text-orange-700 dark:text-orange-300', iconTextClass: 'text-orange-600 dark:text-orange-400' },
-                    'bast': { label: 'BAST', icon: FileCheck, color: 'emerald', bgClass: 'bg-emerald-50 dark:bg-emerald-950/30', borderClass: 'border-emerald-200 dark:border-emerald-800', textClass: 'text-emerald-700 dark:text-emerald-300', iconTextClass: 'text-emerald-600 dark:text-emerald-400' },
-                    'dokumen-perencanaan': { label: 'Dokumen Perencanaan', icon: ClipboardPaste, color: 'violet', bgClass: 'bg-violet-50 dark:bg-violet-950/30', borderClass: 'border-violet-200 dark:border-violet-800', textClass: 'text-violet-700 dark:text-violet-300', iconTextClass: 'text-violet-600 dark:text-violet-400' },
-                    'surat-hasil-pemeriksaan': { label: 'Surat Hasil Pemeriksaan', icon: ShieldCheck, color: 'rose', bgClass: 'bg-rose-50 dark:bg-rose-950/30', borderClass: 'border-rose-200 dark:border-rose-800', textClass: 'text-rose-700 dark:text-rose-300', iconTextClass: 'text-rose-600 dark:text-rose-400' },
+                  const docTypeConfig: Record<SPJDocType, { label: string; shortLabel: string; icon: any; bgClass: string; borderClass: string; textClass: string; iconTextClass: string }> = {
+                    'surat-pesanan': { label: 'Surat Pesanan', shortLabel: 'SP', icon: Package, bgClass: 'bg-teal-50 dark:bg-teal-950/30', borderClass: 'border-teal-200 dark:border-teal-800', textClass: 'text-teal-700 dark:text-teal-300', iconTextClass: 'text-teal-600 dark:text-teal-400' },
+                    'surat-balasan': { label: 'Surat Balasan Toko', shortLabel: 'SBT', icon: Store, bgClass: 'bg-orange-50 dark:bg-orange-950/30', borderClass: 'border-orange-200 dark:border-orange-800', textClass: 'text-orange-700 dark:text-orange-300', iconTextClass: 'text-orange-600 dark:text-orange-400' },
+                    'bast': { label: 'BAST', shortLabel: 'BAST', icon: FileCheck, bgClass: 'bg-emerald-50 dark:bg-emerald-950/30', borderClass: 'border-emerald-200 dark:border-emerald-800', textClass: 'text-emerald-700 dark:text-emerald-300', iconTextClass: 'text-emerald-600 dark:text-emerald-400' },
+                    'dokumen-perencanaan': { label: 'Dokumen Perencanaan', shortLabel: 'DP', icon: ClipboardPaste, bgClass: 'bg-violet-50 dark:bg-violet-950/30', borderClass: 'border-violet-200 dark:border-violet-800', textClass: 'text-violet-700 dark:text-violet-300', iconTextClass: 'text-violet-600 dark:text-violet-400' },
+                    'surat-hasil-pemeriksaan': { label: 'Surat Hasil Pemeriksaan', shortLabel: 'SHP', icon: ShieldCheck, bgClass: 'bg-rose-50 dark:bg-rose-950/30', borderClass: 'border-rose-200 dark:border-rose-800', textClass: 'text-rose-700 dark:text-rose-300', iconTextClass: 'text-rose-600 dark:text-rose-400' },
                   }
                   const config = docTypeConfig[docType]
                   const IconComp = config.icon
-                  const typeDocs = spjDocs.filter(d => d.type === docType)
-                  const summary = spjDocsSummary[docType]
+
+                  // Get spending items from SPJ data
+                  const src = selectedSpjMonth === -1 ? spjData?.tahunan : spjData?.bulanan?.[selectedSpjMonth]
+                  const allItems = src?.standarGroups.flatMap(g => g.items) || []
+                  const itemsWithDoc = allItems.filter(item => {
+                    const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                    return spjDocsCompleteness[ik]?.[docType] !== null && spjDocsCompleteness[ik]?.[docType] !== undefined
+                  })
+                  const totalItems = allItems.length
 
                   return (
                     <>
-                      {/* Summary Card */}
+                      {/* Header Card */}
                       <Card className={`${config.borderClass} ${config.bgClass}`}>
                         <CardContent className="py-3 px-4">
                           <div className="flex items-center justify-between">
@@ -1836,141 +1999,214 @@ export default function Home() {
                               <div>
                                 <h3 className={`text-sm font-semibold ${config.textClass}`}>{config.label}</h3>
                                 <p className="text-[10px] text-muted-foreground">
-                                  {summary ? `${summary.count} dokumen · ${formatFileSize(summary.totalSize)}` : 'Belum ada dokumen'}
-                                  {summary && summary.months.length > 0 && ` · ${summary.months.length} periode`}
+                                  {totalItems > 0
+                                    ? `${itemsWithDoc.length} dari ${totalItems} pos memiliki dokumen`
+                                    : 'Import RKAS & BKU untuk melihat pos belanja'
+                                  }
                                 </p>
                               </div>
                             </div>
                             {spjDocsLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                           </div>
+                          {totalItems > 0 && (
+                            <div className="mt-2">
+                              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all ${config.bgClass.replace('50', '400').replace('950/30', '500')}`}
+                                  style={{ width: `${totalItems > 0 ? Math.round((itemsWithDoc.length / totalItems) * 100) : 0}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
 
-                      {/* Upload Section */}
-                      <Card>
-                        <CardHeader className="pb-2">
-                          <CardTitle className="text-xs flex items-center gap-2">
-                            <FileUp className="h-3.5 w-3.5" />
-                            Unggah {config.label}
-                          </CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {/* Month selector */}
-                            <div>
-                              <label className="text-[10px] font-medium text-muted-foreground mb-1 block">Bulan</label>
-                              <select
-                                value={spjDocBulan}
-                                onChange={e => setSpjDocBulan(e.target.value)}
-                                className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                              >
-                                <option value="">-- Pilih Bulan --</option>
-                                {Object.keys(MONTH_NAMES).map(m => (
-                                  <option key={m} value={m}>{m}</option>
-                                ))}
-                              </select>
-                            </div>
-                            {/* Year input */}
-                            <div>
-                              <label className="text-[10px] font-medium text-muted-foreground mb-1 block">Tahun</label>
-                              <Input
-                                type="text"
-                                placeholder="cth: 2025"
-                                value={spjDocTahun}
-                                onChange={e => setSpjDocTahun(e.target.value)}
-                                className="h-8 text-xs"
-                              />
-                            </div>
-                          </div>
-                          {/* Description */}
-                          <div>
-                            <label className="text-[10px] font-medium text-muted-foreground mb-1 block">Deskripsi</label>
-                            <textarea
-                              placeholder="Deskripsi singkat dokumen..."
-                              value={spjDocDeskripsi}
-                              onChange={e => setSpjDocDeskripsi(e.target.value)}
-                              rows={2}
-                              className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring resize-none"
-                            />
-                          </div>
-                          {/* File input + Upload button */}
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="file"
-                              ref={el => { spjDocFileRefs.current[docType] = el }}
-                              onChange={e => handleSPJDocUpload(e, docType)}
-                              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                              className="hidden"
-                            />
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-2 text-xs"
-                              onClick={() => spjDocFileRefs.current[docType]?.click()}
-                              disabled={spjDocUploading === docType}
-                            >
-                              {spjDocUploading === docType ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />}
-                              {spjDocUploading === docType ? 'Mengunggah...' : 'Pilih File'}
-                            </Button>
-                            <span className="text-[10px] text-muted-foreground">PDF, JPG, DOC</span>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      {/* Document List */}
-                      {typeDocs.length === 0 ? (
+                      {/* No SPJ data */}
+                      {!src ? (
                         <Card className="border-dashed">
                           <CardContent className="py-12 text-center space-y-2">
                             <div className={`h-12 w-12 rounded-xl ${config.bgClass} flex items-center justify-center mx-auto`}>
                               <IconComp className={`h-6 w-6 ${config.iconTextClass}`} />
                             </div>
                             <div>
-                              <h4 className="text-xs font-medium">Belum ada {config.label}</h4>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">Unggah dokumen untuk memulai</p>
+                              <h4 className="text-xs font-medium">Belum ada data pos belanja</h4>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">Import RKAS dan BKU terlebih dahulu</p>
                             </div>
                           </CardContent>
                         </Card>
                       ) : (
-                        <div className="space-y-2">
-                          {typeDocs.map(doc => (
-                            <Card key={doc.id} className="overflow-hidden">
-                              <CardContent className="py-2.5 px-3">
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex items-start gap-2 min-w-0 flex-1">
-                                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${config.bgClass}`}>
-                                      <IconComp className={`h-4 w-4 ${config.iconTextClass}`} />
-                                    </div>
-                                    <div className="min-w-0 flex-1">
-                                      <p className="text-xs font-medium truncate" title={doc.originalName}>{doc.originalName}</p>
-                                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5 flex-wrap">
-                                        {(doc.bulan || doc.tahun) && (
-                                          <span className="flex items-center gap-0.5">
-                                            <Calendar className="h-2.5 w-2.5" />
-                                            {doc.bulan && (MONTH_NAMES[doc.bulan] || doc.bulan)} {doc.tahun}
-                                          </span>
-                                        )}
-                                        <span>{formatFileSize(doc.fileSize)}</span>
-                                        <span>{new Date(doc.tanggalUpload).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                        <>
+                          {/* Period Selector for doc tabs */}
+                          <Card>
+                            <CardContent className="py-2.5 px-3">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-[10px] text-muted-foreground font-medium shrink-0">Periode:</span>
+                                {spjData?.tahunan && (
+                                  <Button
+                                    variant={selectedSpjMonth === -1 ? 'default' : 'outline'}
+                                    size="sm" className="h-7 text-[11px] gap-1"
+                                    onClick={() => setSelectedSpjMonth(-1)}
+                                  >
+                                    <Calendar className="h-3 w-3" /> Tahunan {spjData.tahunan.tahun}
+                                  </Button>
+                                )}
+                                {spjData?.bulanan.map((m, idx) => (
+                                  <Button
+                                    key={idx}
+                                    variant={selectedSpjMonth === idx ? 'default' : 'outline'}
+                                    size="sm" className="h-7 text-[11px] gap-1"
+                                    onClick={() => setSelectedSpjMonth(idx)}
+                                  >
+                                    <Calendar className="h-3 w-3" /> {MONTH_NAMES[m.bulan] || m.bulan.slice(0,3)} {m.tahun}
+                                  </Button>
+                                ))}
+                              </div>
+                            </CardContent>
+                          </Card>
+
+                          {/* Per-item rows grouped by standar */}
+                          {src.standarGroups.map(group => {
+                            const GroupIcon = STANDAR_ICONS[group.kode] || FileText
+                            const colorIdx = (['02','03','04','05','06','07','08'].indexOf(group.kode))
+                            const groupColor = CHART_COLORS[colorIdx >= 0 ? colorIdx : 7]
+                            const groupItemsWithDoc = group.items.filter(item => {
+                              const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                              return spjDocsCompleteness[ik]?.[docType] !== null && spjDocsCompleteness[ik]?.[docType] !== undefined
+                            })
+                            return (
+                              <Card key={group.kode}>
+                                <CardHeader className="pb-2">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <div className="h-7 w-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${groupColor}20` }}>
+                                        <GroupIcon className="h-3.5 w-3.5" style={{ color: groupColor }} />
                                       </div>
-                                      {doc.deskripsi && (
-                                        <p className="text-[10px] text-muted-foreground mt-1 truncate" title={doc.deskripsi}>{doc.deskripsi}</p>
-                                      )}
+                                      <div>
+                                        <CardTitle className="text-xs">{group.nama}</CardTitle>
+                                        <p className="text-[10px] text-muted-foreground">
+                                          {groupItemsWithDoc.length}/{group.items.length} pos memiliki {config.shortLabel}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <div className="h-1.5 w-16 bg-muted rounded-full overflow-hidden">
+                                        <div
+                                          className={`h-full rounded-full ${config.bgClass.replace('50', '400').replace('950/30', '500')}`}
+                                          style={{ width: `${group.items.length > 0 ? Math.round((groupItemsWithDoc.length / group.items.length) * 100) : 0}%` }}
+                                        />
+                                      </div>
+                                      <span className="text-[9px] text-muted-foreground">
+                                        {group.items.length > 0 ? Math.round((groupItemsWithDoc.length / group.items.length) * 100) : 0}%
+                                      </span>
                                     </div>
                                   </div>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 shrink-0 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
-                                    onClick={() => deleteSPJDoc(doc.id)}
-                                    title="Hapus dokumen"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          ))}
-                        </div>
+                                </CardHeader>
+                                <CardContent className="pt-0">
+                                  <div className="space-y-1.5">
+                                    {group.items.map((item, idx) => {
+                                      const ik = compositeKey(item.kodeProgram, item.kodeRekening)
+                                      const existingDoc = spjDocsCompleteness[ik]?.[docType]
+                                      const hasDoc = existingDoc !== null && existingDoc !== undefined
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className={`flex items-center gap-2 p-2 rounded-lg border text-[11px] ${
+                                            hasDoc
+                                              ? `${config.borderClass} ${config.bgClass}`
+                                              : 'border-dashed border-muted'
+                                          }`}
+                                        >
+                                          {/* Status icon */}
+                                          {hasDoc ? (
+                                            <CheckCircle2 className={`h-4 w-4 shrink-0 ${config.iconTextClass}`} />
+                                          ) : (
+                                            <X className="h-4 w-4 shrink-0 text-red-300 dark:text-red-700" />
+                                          )}
+                                          {/* Item info */}
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                              <span className="truncate font-medium" title={item.uraian}>{item.uraian}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                                              <code className="font-mono">{item.kodeRekening}</code>
+                                              <span>·</span>
+                                              <span className="text-emerald-600">{fmtRp(item.anggaran)}</span>
+                                            </div>
+                                            {/* Existing doc details */}
+                                            {hasDoc && existingDoc && (
+                                              <div className="flex items-center gap-2 mt-1 text-[10px]">
+                                                <span className="truncate text-muted-foreground" title={existingDoc.originalName}>
+                                                  {existingDoc.originalName}
+                                                </span>
+                                                <span className="shrink-0 text-muted-foreground">{formatFileSize(existingDoc.fileSize)}</span>
+                                                <span className="shrink-0 text-muted-foreground">
+                                                  {new Date(existingDoc.tanggalUpload).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}
+                                                </span>
+                                              </div>
+                                            )}
+                                          </div>
+                                          {/* Actions */}
+                                          {hasDoc && existingDoc ? (
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className={`h-7 w-7 ${config.iconTextClass} hover:${config.bgClass}`}
+                                                onClick={() => {
+                                                  setSpjUploadTarget({
+                                                    itemKey: ik,
+                                                    kodeRekening: item.kodeRekening,
+                                                    kodeProgram: item.kodeProgram,
+                                                    uraian: item.uraian,
+                                                    type: docType,
+                                                  })
+                                                  setTimeout(() => spjDocFileRef.current?.click(), 0)
+                                                }}
+                                                title="Ganti dokumen"
+                                                disabled={spjDocUploading === docType}
+                                              >
+                                                <FileUp className="h-3.5 w-3.5" />
+                                              </Button>
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                                onClick={() => deleteSPJDoc(existingDoc.id)}
+                                                title="Hapus dokumen"
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <Button
+                                              variant="outline"
+                                              size="sm"
+                                              className={`h-7 text-[10px] gap-1 shrink-0 ${config.borderClass} ${config.textClass}`}
+                                              onClick={() => {
+                                                setSpjUploadTarget({
+                                                  itemKey: ik,
+                                                  kodeRekening: item.kodeRekening,
+                                                  kodeProgram: item.kodeProgram,
+                                                  uraian: item.uraian,
+                                                  type: docType,
+                                                })
+                                                setTimeout(() => spjDocFileRef.current?.click(), 0)
+                                              }}
+                                              disabled={spjDocUploading === docType}
+                                            >
+                                              {spjDocUploading === docType ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileUp className="h-3 w-3" />}
+                                              {spjDocUploading === docType ? '...' : 'Unggah'}
+                                            </Button>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            )
+                          })}
+                        </>
                       )}
                     </>
                   )

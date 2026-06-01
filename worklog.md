@@ -41,3 +41,30 @@ Stage Summary:
 - API at /api/pdf/spj-docs working correctly with GET/POST/DELETE
 - Color scheme: teal (Surat Pesanan), orange (Surat Balasan), emerald (BAST), violet (Dokumen Perencanaan), rose (Surat Hasil Pemeriksaan)
 - page.tsx grew from ~2355 to ~2632 lines
+
+---
+Task ID: 3
+Agent: Main
+Task: Redesign SPJ — Documents linked to spending items from RKAS+BKU matching (pertanggungjawaban per pos belanja)
+
+Work Log:
+- Updated SPJ Docs API: added itemKey, kodeRekening, kodeProgram, uraian fields to SPJDocument
+- API now returns completenessMap (itemKey → {docType: doc|null}) and stats (totalItems, completeItems, incompleteItems)
+- Duplicate prevention changed: one doc per type per item (not per month)
+- Updated SPJDocument interface in page.tsx with new fields
+- Replaced spjDocsSummary with spjDocsCompleteness and spjDocsStats state
+- Added spjUploadTarget state to track which item+type user is uploading for
+- Added compositeKey and normalizeKode helpers for matching items to docs
+- Updated handleSPJDocUpload to include itemKey, kodeRekening, kodeProgram, uraian
+- Rebuilt Rekapitulasi sub-tab: added "Kelengkapan SPJ" summary card with progress bar + per-type counts; added "Kelengkapan SPJ" column to detail table with 5 clickable icon indicators
+- Rebuilt each doc type sub-tab: shows spending items from RKAS+BKU matching, grouped by standar; each item shows upload/replace/delete actions; completeness tracking per item
+- Sub-tab badges show "X/Y" (items with doc / total items)
+- Fixed runtime error: replaced stale spjDocsSummary reference with spjDocsCompleteness
+- Verified lint passes and page loads without errors
+
+Stage Summary:
+- SPJ now properly tracks 5 accountability documents PER SPENDING ITEM (from RKAS+BKU matching)
+- Rekapitulasi view has Kelengkapan SPJ column with 5 clickable icons per row
+- Each doc type sub-tab shows per-item view with upload/replace/delete per spending item
+- Completeness tracked via completenessMap from API
+- page.tsx: ~2868 lines
