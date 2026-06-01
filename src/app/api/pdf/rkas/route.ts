@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
+import { processPDF, getPDFFiles, uploadToBlob, downloadFromBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+if (!isServerless()) {
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+}
 
 // --- Interfaces ---
 interface RKASItem {
@@ -70,6 +73,7 @@ function getCacheKey(fileName: string): string {
 }
 
 function getFileModTime(fileName: string): number {
+  if (isServerless()) return 0;
   try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch { return 0; }
 }
 
@@ -90,7 +94,311 @@ function extractStandarCode(kodeProgram: string): string {
   return match ? match[1] : '';
 }
 
-// --- Python PDF Parser ---
+// --- Serverless: Parse RKAS from extracted text using regex ---
+function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // --- Extract header info ---
+  const headerInfo: Record<string, string> = {};
+
+  // Extract judul from first meaningful lines
+  const judulParts: string[] = [];
+  for (const line of lines.slice(0, 10)) {
+    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan)\s*:/i, line)) break;
+    if (reSearch(/Halaman.*dari/i, line)) continue;
+    if (reSearch(/Kertas Kerja.*NPSN/i, line)) continue;
+    judulParts.push(line);
+  }
+  headerInfo.judul = judulParts.join(' ');
+
+  // Detect tipe from judul
+  const judulUpper = headerInfo.judul.toUpperCase();
+  if (judulUpper.includes('PERBULAN') || judulUpper.includes('BULANAN')) {
+    headerInfo.tipeFromJudul = 'bulanan';
+  } else if (judulUpper.includes('TAHUNAN') || (judulUpper.includes('RKAS') && !judulUpper.includes('PERBULAN'))) {
+    headerInfo.tipeFromJudul = 'tahunan';
+  }
+
+  for (const line of lines) {
+    // Skip footer lines
+    if (line.includes('Halaman') && line.includes('dari')) continue;
+    if (line.includes('Kertas Kerja') && line.includes('NPSN')) continue;
+
+    // Bulan
+    const bulanMatch = reMatch(/Bulan\s*:\s*(\w+)/i, line);
+    if (bulanMatch) headerInfo.bulan = bulanMatch[1];
+
+    // Tahun from "TAHUN ANGGARAN"
+    const tahunMatch = reMatch(/TAHUN ANGGARAN\s*:\s*(\d{4})/i, line);
+    if (tahunMatch) headerInfo.tahun = tahunMatch[1];
+
+    // "Bulan : Januari 2026" pattern
+    const bulanTahun = reMatch(/Bulan\s*:\s*(\w+)\s+(\d{4})/i, line);
+    if (bulanTahun) {
+      headerInfo.bulan = bulanTahun[1];
+      headerInfo.tahun = bulanTahun[2];
+    }
+
+    // NPSN
+    const npsnMatch = reMatch(/NPSN\s*:\s*(\d+)/i, line);
+    if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
+
+    // Nama Sekolah
+    const sekolahMatch = reMatch(/Nama Sekolah\s*:\s*(.+)/i, line);
+    if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+
+    // Alamat
+    const alamatMatch = reMatch(/Alamat\s*:\s*(.+)/i, line);
+    if (alamatMatch) headerInfo.alamat = alamatMatch[1].trim();
+
+    // Kabupaten
+    const kabMatch = reMatch(/Kabupaten\s*:\s*(.+)/i, line);
+    if (kabMatch) headerInfo.kabupaten = kabMatch[1].trim();
+
+    // Provinsi
+    const provMatch = reMatch(/Provinsi\s*:\s*(.+)/i, line);
+    if (provMatch) headerInfo.provinsi = provMatch[1].trim();
+
+    // Sumber Dana
+    if (line.includes('Sumber Dana') && !line.includes('dan Alokasi')) {
+      const sdMatch = reMatch(/Sumber Dana\s*:?\s*(.+)/i, line);
+      if (sdMatch) {
+        const val = sdMatch[1].trim();
+        if (val && val !== ':' && !val.includes('No.') && !val.includes('Kode') && !val.includes('Penerimaan')) {
+          headerInfo.sumberDana = val;
+        }
+      }
+    }
+  }
+
+  // If tahun not found, try generic
+  if (!headerInfo.tahun) {
+    const tahunM = reMatch(/:\s*(\d{4})/, text);
+    if (tahunM) headerInfo.tahun = tahunM[1];
+  }
+
+  // --- Extract Penerimaan (revenue) table from text ---
+  const penerimaan: RKASPenerimaanItem[] = [];
+  let totalPenerimaan = 0;
+
+  // Look for penerimaan section patterns
+  // Pattern: kode (like 1.01.01) followed by description followed by amount
+  const penerimaanRegex = /^(\d+\.\d+(?:\.\d+)?)\s+(.+?)\s+([\d.]+(?:\s*[\d.]*)*)$/;
+  let inPenerimaan = false;
+
+  for (const line of lines) {
+    const upperLine = line.toUpperCase();
+    if (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO'))) {
+      inPenerimaan = true;
+      continue;
+    }
+    if (inPenerimaan) {
+      // Check for total row
+      if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) {
+        const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
+        if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
+        inPenerimaan = false;
+        continue;
+      }
+      // Check if we've moved past penerimaan section
+      if (upperLine.includes('BELANJA') || upperLine.includes('PENGELUARAN')) {
+        inPenerimaan = false;
+        continue;
+      }
+      const match = reMatch(/^(\d+\.\d+(?:\.\d+)?)\s+(.+?)\s+([\d.]+)$/, line);
+      if (match) {
+        penerimaan.push({
+          kode: match[1],
+          nama: match[2].trim(),
+          jumlah: parseAmount(match[3]),
+        });
+      }
+    }
+  }
+
+  if (totalPenerimaan === 0 && penerimaan.length > 0) {
+    totalPenerimaan = penerimaan.reduce((s, p) => s + p.jumlah, 0);
+  }
+
+  // --- Extract Belanja (expenditure) table from text ---
+  const belanjaRaw: {
+    noUrut: string; kodeRekening: string; kodeProgram: string; uraian: string;
+    volume: string; satuan: string; tarifHarga: string; jumlah: string;
+  }[] = [];
+
+  // Belanja items pattern: number, kode rekening (5.x.x.x), kode program (0x.x.x.x), uraian, volume, satuan, tarif, jumlah
+  // Try to match belanja rows line by line
+  // Pattern: starts with a number (no urut), then kode rekening, then kode program, then description, then numbers at end
+  const belanjaLineRegex = /^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+([\d.]*)\s*(\w*)\s*([\d.]*)\s*([\d.]+)$/;
+  // Simpler pattern for lines that might have varying column counts
+  const belanjaSimpleRegex = /^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+([\d.]+)\s*$/;
+
+  let inBelanja = false;
+  for (const line of lines) {
+    const upperLine = line.toUpperCase();
+    if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
+        (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
+      inBelanja = true;
+      continue;
+    }
+    if (!inBelanja) continue;
+
+    // Skip header/subheader rows
+    if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
+    if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
+    if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
+    if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
+
+    // Try full pattern first (8 columns: noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah)
+    const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
+    if (fullMatch) {
+      belanjaRaw.push({
+        noUrut: fullMatch[1],
+        kodeRekening: fullMatch[2],
+        kodeProgram: fullMatch[3],
+        uraian: fullMatch[4].trim(),
+        volume: fullMatch[5],
+        satuan: fullMatch[6],
+        tarifHarga: fullMatch[7],
+        jumlah: fullMatch[8],
+      });
+      continue;
+    }
+
+    // Try simpler pattern (5 columns: noUrut, kodeRekening, kodeProgram, uraian, jumlah)
+    const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
+    if (simpleMatch) {
+      belanjaRaw.push({
+        noUrut: simpleMatch[1],
+        kodeRekening: simpleMatch[2],
+        kodeProgram: simpleMatch[3],
+        uraian: simpleMatch[4].trim(),
+        volume: '',
+        satuan: '',
+        tarifHarga: '',
+        jumlah: simpleMatch[5],
+      });
+      continue;
+    }
+  }
+
+  // --- Build RKASMonth from parsed data ---
+  // Parse belanja items - only keep leaf items (those with kodeRekening)
+  const rawItems: RKASItem[] = belanjaRaw
+    .filter(r => r.kodeRekening && r.kodeRekening.trim() !== '')
+    .map(r => ({
+      noUrut: r.noUrut,
+      kodeRekening: r.kodeRekening,
+      kodeProgram: r.kodeProgram,
+      uraian: r.uraian,
+      volume: r.volume,
+      satuan: r.satuan,
+      tarifHarga: parseAmount(r.tarifHarga),
+      jumlah: parseAmount(r.jumlah),
+    }));
+
+  // Filter out intermediate "rekening header" rows (subtotals)
+  const allItems: RKASItem[] = [];
+  for (let idx = 0; idx < rawItems.length; idx++) {
+    const item = rawItems[idx];
+    const next = idx + 1 < rawItems.length ? rawItems[idx + 1] : null;
+    const itemStartsWithNumber = /^\d{3}[.\s]/.test(item.uraian.trim());
+    const isIntermediate = !itemStartsWithNumber
+      && next
+      && item.kodeRekening === next.kodeRekening
+      && item.kodeProgram.replace(/\s/g, '') === next.kodeProgram.replace(/\s/g, '')
+      && /^\d{3}[.\s]/.test(next.uraian.trim());
+    if (!isIntermediate) {
+      allItems.push(item);
+    }
+  }
+
+  // Group items by standar category
+  const standarMap = new Map<string, RKASItem[]>();
+  for (const item of allItems) {
+    const standarCode = extractStandarCode(item.kodeProgram);
+    if (standarCode) {
+      if (!standarMap.has(standarCode)) {
+        standarMap.set(standarCode, []);
+      }
+      standarMap.get(standarCode)!.push(item);
+    }
+  }
+
+  // Build standarList in order
+  const standarList: RKASStandar[] = [];
+  const orderedCodes = ['02', '03', '04', '05', '06', '07', '08'];
+  for (const code of orderedCodes) {
+    const items = standarMap.get(code);
+    if (items && items.length > 0) {
+      standarList.push({
+        kode: code,
+        nama: STANDAR_MAP[code] || `Standar ${code}`,
+        items,
+        total: items.reduce((s, item) => s + item.jumlah, 0),
+      });
+    }
+  }
+
+  // Also add any standar codes not in the predefined list
+  for (const [code, items] of standarMap) {
+    if (!orderedCodes.includes(code) && items.length > 0) {
+      standarList.push({
+        kode: code,
+        nama: STANDAR_MAP[code] || `Standar ${code}`,
+        items,
+        total: items.reduce((s, item) => s + item.jumlah, 0),
+      });
+    }
+  }
+
+  const totalBelanja = allItems.reduce((s, item) => s + item.jumlah, 0);
+
+  // Determine tipe
+  const bulanValue = (headerInfo.bulan || '').toUpperCase();
+  const tipeFromJudul = headerInfo.tipeFromJudul || '';
+  let tipe: 'bulanan' | 'tahunan';
+
+  if (tipeFromJudul === 'bulanan') {
+    tipe = 'bulanan';
+  } else if (tipeFromJudul === 'tahunan') {
+    tipe = 'tahunan';
+  } else {
+    tipe = bulanValue ? 'bulanan' : 'tahunan';
+  }
+
+  const judul = headerInfo.judul || (tipe === 'bulanan' ? 'Rincian Kertas Kerja Perbulan' : 'Kertas Kerja RKAS');
+
+  return {
+    fileName,
+    judul,
+    bulan: bulanValue,
+    tahun: headerInfo.tahun || '',
+    tipe,
+    sumberDana: headerInfo.sumberDana || '',
+    namaSekolah: headerInfo.namaSekolah || '',
+    npsn: headerInfo.npsn || '',
+    alamat: headerInfo.alamat || '',
+    kabupaten: headerInfo.kabupaten || '',
+    provinsi: headerInfo.provinsi || '',
+    totalPenerimaan,
+    totalBelanja,
+    penerimaan,
+    standarList,
+    allItems,
+  };
+}
+
+// --- Regex helpers ---
+function reSearch(pattern: RegExp, text: string): boolean {
+  return pattern.test(text);
+}
+
+function reMatch(pattern: RegExp, text: string): RegExpMatchArray | null {
+  return text.match(pattern);
+}
+
+// --- Python PDF Parser (Local mode) ---
 const PYTHON_SCRIPT = `
 import pdfplumber
 import json
@@ -245,10 +553,6 @@ for i, page in enumerate(pdf.pages):
 
                 # Parse based on detected table type
                 if is_tahunan_table and ncols >= 10:
-                    # Tahunan RKAS format:
-                    # Cols: No.Urut, Kode Rekening, Kode Kegiatan, Uraian Kegiatan, Jumlah, + allocation cols
-                    # The "jumlah" is the 5th col (index 4)
-                    # After that are BOSP REGULER (Operasi, Modal), BOSP DAERAH, etc.
                     kp = r[2].strip() if len(r) > 2 else ''
                     uraian_val = r[3].strip().replace('\\n', ' ') if len(r) > 3 else ''
                     jumlah_val = r[4].strip() if len(r) > 4 else ''
@@ -265,8 +569,6 @@ for i, page in enumerate(pdf.pages):
                     })
 
                 elif is_bulanan_table and ncols >= 10:
-                    # Bulanan RKAS format with Rincian Perhitungan columns
-                    # kodeProgram can span 2-3 columns, last 4 are volume, satuan, tarifHarga, jumlah
                     kp_parts = []
                     uraian_idx = -1
                     for ci in range(2, ncols - 4):
@@ -301,7 +603,6 @@ for i, page in enumerate(pdf.pages):
                     })
 
                 elif ncols == 9:
-                    # 9 cols: No.Urut, Kode Rekening, Kode Program (2 cols), Uraian, Volume, Satuan, Tarif Harga, Jumlah
                     kp = (r[2].strip() + ' ' + r[3].strip()).strip()
                     belanja_rows.append({
                         'noUrut': no_urut,
@@ -315,7 +616,6 @@ for i, page in enumerate(pdf.pages):
                     })
 
                 elif ncols <= 8:
-                    # Compact: No.Urut, Kode Rekening, Kode Program, Uraian, Volume, Satuan, Tarif Harga, Jumlah
                     belanja_rows.append({
                         'noUrut': no_urut,
                         'kodeRekening': r[1].strip() if len(r) > 1 else '',
@@ -332,7 +632,24 @@ print(json.dumps(result, ensure_ascii=False))
 `;
 
 // --- Parse single RKAS file ---
-function parseRKASFile(fileName: string): RKASMonth | null {
+async function parseRKASFile(fileName: string): Promise<RKASMonth | null> {
+  if (isServerless()) {
+    // Serverless: download from blob + parse with pdf-parse + regex
+    const blobInfo = await getBlobInfo(fileName);
+    if (!blobInfo) return null;
+
+    try {
+      const buffer = await downloadFromBlob(blobInfo.url);
+      const info = await processPDF(fileName);
+      const fullText = info.extractedText.map(p => p.text).join('\n');
+      return parseRKASFromText(fullText, fileName);
+    } catch (err) {
+      console.error(`Failed to parse RKAS ${fileName} (serverless):`, err);
+      return null;
+    }
+  }
+
+  // Local: existing Python approach
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) return null;
 
@@ -498,22 +815,13 @@ function parseRKASFile(fileName: string): RKASMonth | null {
 
 // GET: List all RKAS files and their parsed data
 export async function GET() {
-  if (isServerless()) {
-    return serverlessErrorResponse('RKAS');
-  }
   try {
-    if (!fs.existsSync(UPLOAD_DIR)) {
-      return NextResponse.json({ months: [], bulanan: [], tahunan: [], files: [] });
-    }
-
-    const files = fs.readdirSync(UPLOAD_DIR)
-      .filter(f => isRKASFile(f))
-      .sort();
+    const files = (await getPDFFiles()).filter(f => isRKASFile(f)).sort();
 
     const months: RKASMonth[] = [];
     for (const file of files) {
       try {
-        const data = parseRKASFile(file);
+        const data = await parseRKASFile(file);
         if (data) months.push(data);
       } catch (err) {
         console.error(`Error parsing RKAS file ${file}:`, err);
@@ -530,6 +838,21 @@ export async function GET() {
       const ib = mb === -1 ? 99 : mb;
       return ia - ib;
     });
+
+    if (isServerless()) {
+      // On serverless, we can't delete duplicates from blob easily, just dedup in memory
+      const seen = new Map<string, RKASMonth>();
+      for (const m of months) {
+        const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `BULANAN_${m.bulan}_${m.tahun}`;
+        if (!seen.has(key)) {
+          seen.set(key, m);
+        }
+      }
+      const dedupedMonths = Array.from(seen.values());
+      const bulanan = dedupedMonths.filter(m => m.tipe === 'bulanan');
+      const tahunan = dedupedMonths.filter(m => m.tipe === 'tahunan');
+      return NextResponse.json({ months: dedupedMonths, bulanan, tahunan, files });
+    }
 
     // Deduplicate: bulanan by bulan+tahun, tahunan by tahun only
     const seen = new Map<string, RKASMonth>();
@@ -564,31 +887,55 @@ export async function GET() {
 
 // POST: Import a new RKAS file
 export async function POST(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('RKAS');
-  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     if (!file) return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     if (!file.name.endsWith('.pdf')) return NextResponse.json({ error: 'Only PDF files allowed' }, { status: 400 });
 
-    const filePath = path.join(UPLOAD_DIR, file.name);
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    await writeFile(filePath, buffer);
 
-    const data = parseRKASFile(file.name);
+    if (isServerless()) {
+      // Serverless: upload to blob + parse
+      await uploadToBlob(file.name, buffer);
+      const data = await parseRKASFile(file.name);
+      if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
+
+      // Deduplicate: delete other blob files with same key
+      let replacedFile: string | null = null;
+      const existingFiles = (await getPDFFiles()).filter(f => isRKASFile(f) && f !== file.name);
+      for (const existing of existingFiles) {
+        try {
+          const existingData = await parseRKASFile(existing);
+          if (!existingData) continue;
+          const isDuplicate = data.tipe === 'tahunan'
+            ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
+            : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
+          if (isDuplicate) {
+            replacedFile = existing;
+            await deleteFromBlob(existing);
+          }
+        } catch {}
+      }
+
+      return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
+    }
+
+    // Local: save to upload dir + process with Python
+    const filePath = path.join(UPLOAD_DIR, file.name);
+    await writeFileLocal(filePath, buffer);
+
+    const data = await parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
 
     // Deduplicate: remove other RKAS files with the same key
-    // Bulanan: dedup by bulan+tahun, Tahunan: dedup by tahun only
     let replacedFile: string | null = null;
     const existingFiles = fs.readdirSync(UPLOAD_DIR)
       .filter(f => isRKASFile(f) && f !== file.name);
     for (const existing of existingFiles) {
       try {
-        const existingData = parseRKASFile(existing);
+        const existingData = await parseRKASFile(existing);
         if (!existingData) continue;
         const isDuplicate = data.tipe === 'tahunan'
           ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
@@ -615,23 +962,21 @@ export async function POST(request: Request) {
 
 // DELETE: Remove an RKAS file and its cache
 export async function DELETE(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('RKAS');
-  }
   try {
     const body = await request.json();
     const { fileName } = body;
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
 
+    if (isServerless()) {
+      await deleteFromBlob(fileName);
+      return NextResponse.json({ success: true });
+    }
+
     const filePath = path.join(UPLOAD_DIR, fileName);
     const cachePath = getCacheKey(fileName);
 
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-    if (fs.existsSync(cachePath)) {
-      fs.unlinkSync(cachePath);
-    }
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
@@ -640,7 +985,7 @@ export async function DELETE(request: Request) {
   }
 }
 
-function writeFile(filePath: string, buffer: Buffer): Promise<void> {
+function writeFileLocal(filePath: string, buffer: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
     fs.writeFile(filePath, buffer, (err) => err ? reject(err) : resolve());
   });

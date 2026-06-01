@@ -6,9 +6,9 @@ import { isServerless } from '@/lib/serverless';
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const PUBLIC_PAGES_DIR = path.join(process.cwd(), 'public', 'pdf-pages');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+const BLOB_PREFIX = 'pdfs/';
 
 // Ensure directories exist (only on non-serverless environments)
-// Wrapped in try/catch to avoid crashes on Vercel's read-only filesystem
 if (!isServerless()) {
   try {
     if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -88,8 +88,113 @@ function writeCache(fileName: string, data: CachedData): void {
   }
 }
 
-export function getPDFFiles(): string[] {
-  if (isServerless()) return [];
+// --- Vercel Blob helpers ---
+
+async function getBlobModule() {
+  const { put, head, list, del } = await import('@vercel/blob');
+  return { put, head, list, del };
+}
+
+/**
+ * Upload a file to Vercel Blob storage.
+ */
+export async function uploadToBlob(fileName: string, buffer: Buffer): Promise<{ url: string }> {
+  const { put } = await getBlobModule();
+  const blob = await put(`${BLOB_PREFIX}${fileName}`, buffer, {
+    access: 'public',
+    contentType: 'application/pdf',
+  });
+  return { url: blob.url };
+}
+
+/**
+ * Download a file from Vercel Blob storage.
+ */
+export async function downloadFromBlob(url: string): Promise<Buffer> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download from blob: ${response.statusText}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Delete a file from Vercel Blob storage by URL.
+ */
+export async function deleteFromBlobByUrl(url: string): Promise<void> {
+  const { del } = await getBlobModule();
+  await del(url);
+}
+
+/**
+ * Delete a file from Vercel Blob storage by fileName.
+ */
+export async function deleteFromBlob(fileName: string): Promise<void> {
+  const blobInfo = await getBlobInfo(fileName);
+  if (blobInfo) {
+    await deleteFromBlobByUrl(blobInfo.url);
+  }
+}
+
+/**
+ * Get blob info for a file by fileName.
+ */
+export async function getBlobInfo(fileName: string): Promise<{ url: string; size: number; uploadedAt: string } | null> {
+  const { list } = await getBlobModule();
+  const { blobs } = await list({ prefix: `${BLOB_PREFIX}${fileName}` });
+  if (blobs.length > 0) {
+    const blob = blobs[0];
+    return {
+      url: blob.url,
+      size: blob.size,
+      uploadedAt: blob.uploadedAt.toISOString(),
+    };
+  }
+  return null;
+}
+
+/**
+ * Get the blob URL for a file by fileName.
+ */
+export async function getBlobUrl(fileName: string): Promise<string | null> {
+  const info = await getBlobInfo(fileName);
+  return info?.url || null;
+}
+
+// --- pdf-parse helper ---
+
+async function extractTextWithPdfParse(buffer: Buffer): Promise<{
+  text: string;
+  numpages: number;
+  info: Record<string, unknown>;
+}> {
+  const pdf = (await import('pdf-parse')).default;
+  const data = await pdf(buffer);
+  return {
+    text: data.text,
+    numpages: data.numpages,
+    info: data.info,
+  };
+}
+
+// --- Core functions ---
+
+export async function getPDFFiles(): Promise<string[]> {
+  if (isServerless()) {
+    // Serverless: list from Vercel Blob
+    try {
+      const { list } = await getBlobModule();
+      const { blobs } = await list({ prefix: BLOB_PREFIX });
+      return blobs
+        .map(b => b.pathname.replace(BLOB_PREFIX, ''))
+        .filter(f => f.endsWith('.pdf'));
+    } catch {
+      return [];
+    }
+  }
+
+  // Local: read from upload dir
   try {
     if (!fs.existsSync(UPLOAD_DIR)) return [];
     return fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.pdf'));
@@ -98,11 +203,53 @@ export function getPDFFiles(): string[] {
   }
 }
 
-export function processPDF(fileName: string): PDFInfo {
+export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
-    throw new Error('Fitur PDF tidak tersedia di deployment serverless. Gunakan versi lokal.');
+    // Serverless: download from blob + pdf-parse
+    const blobInfo = await getBlobInfo(fileName);
+    if (!blobInfo) {
+      throw new Error(`PDF file not found in blob storage: ${fileName}`);
+    }
+
+    const buffer = await downloadFromBlob(blobInfo.url);
+    const parsed = await extractTextWithPdfParse(buffer);
+
+    // pdf-parse gives us all text as one string; we split by pages heuristically
+    // Since pdf-parse doesn't give per-page text easily, we put it all on "page 1"
+    // For better per-page support, the API routes can re-process if needed
+    const extractedText: { page: number; text: string }[] = [];
+
+    // Try to split text by page breaks (form feed character)
+    const pages = parsed.text.split('\f');
+    if (pages.length > 1) {
+      for (let i = 0; i < pages.length; i++) {
+        if (pages[i].trim()) {
+          extractedText.push({ page: i + 1, text: pages[i].trim() });
+        }
+      }
+    }
+
+    // If no form-feed splits, try to infer pages from numpages
+    if (extractedText.length === 0 && parsed.text.trim()) {
+      // If we can't split, put all text on individual pages based on numpages
+      // Better approach: split by lines and distribute
+      if (parsed.numpages <= 1) {
+        extractedText.push({ page: 1, text: parsed.text.trim() });
+      } else {
+        // Put all text as page 1 with a note - downstream code can handle it
+        extractedText.push({ page: 1, text: parsed.text.trim() });
+      }
+    }
+
+    return {
+      fileName,
+      filePath: blobInfo.url,
+      pageCount: parsed.numpages,
+      extractedText,
+    };
   }
 
+  // Local: keep existing Python approach
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) {
     throw new Error(`PDF file not found: ${fileName}`);
@@ -154,8 +301,10 @@ print(json.dumps(result))
   };
 }
 
-export function renderPDFPages(fileName: string): string[] {
+export async function renderPDFPages(fileName: string): Promise<string[]> {
   if (isServerless()) {
+    // Serverless: PDF page rendering not available - return empty array
+    // Client-side rendering will handle this
     return [];
   }
 
@@ -182,7 +331,7 @@ export function renderPDFPages(fileName: string): string[] {
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
   // Check if pages are already rendered
-  const info = processPDF(fileName);
+  const info = await processPDF(fileName);
   const existingPages: string[] = [];
   let allExist = true;
 
@@ -254,10 +403,11 @@ print("\\n".join(pages))
   return pageImages;
 }
 
-export function getExtractedText(fileName: string): { page: number; text: string }[] {
+export async function getExtractedText(fileName: string): Promise<{ page: number; text: string }[]> {
   if (isServerless()) {
-    return [];
+    const info = await processPDF(fileName);
+    return info.extractedText;
   }
-  const info = processPDF(fileName);
+  const info = await processPDF(fileName);
   return info.extractedText;
 }

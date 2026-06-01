@@ -1,13 +1,13 @@
 /**
- * Serverless environment detection and graceful error handling for Vercel deployment.
+ * Serverless environment detection for Vercel deployment.
  *
  * On Vercel serverless functions:
  * - The file system is read-only (except /tmp)
  * - Python runtime is not available
  * - Local upload directories cannot be created or written to
  *
- * This module provides utilities to detect the serverless environment
- * and return helpful error responses instead of crashing with 500 errors.
+ * When serverless is detected, we use Vercel Blob for file storage
+ * and pdf-parse for text extraction instead of Python scripts.
  */
 
 import fs from 'fs';
@@ -54,54 +54,5 @@ export function isServerless(): boolean {
     // Directory exists but isn't writable = serverless
     _isServerlessCache = true;
     return true;
-  }
-}
-
-/**
- * Standard error response for serverless environment.
- * Returns a JSON response with a helpful message in Indonesian
- * and a `serverless: true` flag that the frontend can detect.
- */
-export function serverlessErrorResponse(featureName?: string): Response {
-  const feature = featureName || 'PDF';
-  return new Response(
-    JSON.stringify({
-      error: `Fitur ${feature} memerlukan penyimpanan file yang tidak tersedia di deployment serverless. Gunakan versi lokal untuk fitur ${feature}.`,
-      serverless: true,
-    }),
-    {
-      status: 501,
-      headers: { 'Content-Type': 'application/json' },
-    }
-  );
-}
-
-/**
- * Wrap a Next.js API route handler with serverless detection.
- * If running on serverless, returns a graceful 501 error.
- * Otherwise, runs the original handler.
- */
-export function withServerlessCheck(
-  handler: (...args: any[]) => Promise<Response>,
-  featureName?: string
-) {
-  return async (...args: any[]) => {
-    if (isServerless()) {
-      return serverlessErrorResponse(featureName);
-    }
-    return handler(...args);
-  };
-}
-
-/**
- * Safe wrapper for fs operations that returns null on serverless
- * instead of throwing an error.
- */
-export function safeFs<T>(operation: () => T, fallback: T): T {
-  if (isServerless()) return fallback;
-  try {
-    return operation();
-  } catch {
-    return fallback;
   }
 }

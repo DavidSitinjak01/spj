@@ -1,36 +1,44 @@
 import { NextResponse } from 'next/server';
-import { processPDF, renderPDFPages, getPDFFiles } from '@/lib/pdf-processor';
+import { processPDF, renderPDFPages, getPDFFiles, getBlobInfo } from '@/lib/pdf-processor';
+import { isServerless } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 
 export async function GET(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('Info PDF');
-  }
   try {
     const { searchParams } = new URL(request.url);
     const fileName = searchParams.get('file');
 
     if (!fileName) {
       // List all available PDFs
-      const files = getPDFFiles();
+      const files = await getPDFFiles();
       return NextResponse.json({ files });
     }
 
-    // Check file existence first before processing
-    const filePath = path.join(UPLOAD_DIR, fileName);
-    if (!fs.existsSync(filePath)) {
-      return NextResponse.json(
-        { error: 'PDF file not found', notFound: true },
-        { status: 404 }
-      );
+    if (isServerless()) {
+      // Serverless: check blob storage
+      const blobInfo = await getBlobInfo(fileName);
+      if (!blobInfo) {
+        return NextResponse.json(
+          { error: 'PDF file not found', notFound: true },
+          { status: 404 }
+        );
+      }
+    } else {
+      // Local: check file system
+      const filePath = path.join(UPLOAD_DIR, fileName);
+      if (!fs.existsSync(filePath)) {
+        return NextResponse.json(
+          { error: 'PDF file not found', notFound: true },
+          { status: 404 }
+        );
+      }
     }
 
-    const info = processPDF(fileName);
-    const pageImages = renderPDFPages(fileName);
+    const info = await processPDF(fileName);
+    const pageImages = await renderPDFPages(fileName);
 
     return NextResponse.json({
       fileName: info.fileName,
