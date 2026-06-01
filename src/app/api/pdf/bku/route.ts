@@ -209,7 +209,7 @@ export async function GET() {
     }
 
     const files = fs.readdirSync(UPLOAD_DIR)
-      .filter(f => f.toLowerCase().includes('bku') && f.endsWith('.pdf'))
+      .filter(f => f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.endsWith('.pdf'))
       .sort();
 
     const months: BKUMonth[] = [];
@@ -225,7 +225,28 @@ export async function GET() {
       return monthOrder.indexOf(a.bulan) - monthOrder.indexOf(b.bulan);
     });
 
-    return NextResponse.json({ months, files });
+    // Deduplicate by bulan+tahun (keep last/first, remove older duplicate files)
+    const seen = new Map<string, BKUMonth>();
+    const toDelete: string[] = [];
+    for (const m of months) {
+      const key = `${m.bulan}_${m.tahun}`;
+      if (seen.has(key)) {
+        // Duplicate found — keep the one already seen, mark the other for deletion
+        toDelete.push(m.fileName);
+      } else {
+        seen.set(key, m);
+      }
+    }
+    // Clean up duplicate files from disk
+    for (const fn of toDelete) {
+      const oldPath = path.join(UPLOAD_DIR, fn);
+      const oldCache = getCacheKey(fn);
+      try { fs.unlinkSync(oldPath); } catch {}
+      try { fs.unlinkSync(oldCache); } catch {}
+    }
+    const dedupedMonths = Array.from(seen.values());
+
+    return NextResponse.json({ months: dedupedMonths, files });
   } catch (error: any) {
     console.error('BKU list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -247,6 +268,25 @@ export async function POST(request: Request) {
 
     const data = parseBKUFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
+
+    // Deduplicate: remove other BKU files with the same bulan+tahun
+    if (data.bulan && data.tahun) {
+      const existingFiles = fs.readdirSync(UPLOAD_DIR)
+        .filter(f => f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.endsWith('.pdf') && f !== file.name);
+      for (const existing of existingFiles) {
+        const existingData = parseBKUFile(existing);
+        if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+          // Delete the old file and its cache
+          const oldPath = path.join(UPLOAD_DIR, existing);
+          const oldCache = getCacheKey(existing);
+          try { fs.unlinkSync(oldPath); } catch {}
+          try { fs.unlinkSync(oldCache); } catch {}
+        }
+      }
+      // Invalidate cache for new file since we need fresh parse
+      const newCache = getCacheKey(file.name);
+      try { fs.unlinkSync(newCache); } catch {}
+    }
 
     return NextResponse.json({ success: true, data });
   } catch (error: any) {

@@ -499,7 +499,27 @@ export async function GET() {
       return ia - ib;
     });
 
-    return NextResponse.json({ months, files });
+    // Deduplicate by bulan+tahun (keep first, remove older duplicate files)
+    const seen = new Map<string, RKASMonth>();
+    const toDelete: string[] = [];
+    for (const m of months) {
+      const key = `${m.bulan}_${m.tahun}`;
+      if (seen.has(key)) {
+        toDelete.push(m.fileName);
+      } else {
+        seen.set(key, m);
+      }
+    }
+    // Clean up duplicate files from disk
+    for (const fn of toDelete) {
+      const oldPath = path.join(UPLOAD_DIR, fn);
+      const oldCache = getCacheKey(fn);
+      try { fs.unlinkSync(oldPath); } catch {}
+      try { fs.unlinkSync(oldCache); } catch {}
+    }
+    const dedupedMonths = Array.from(seen.values());
+
+    return NextResponse.json({ months: dedupedMonths, files });
   } catch (error: any) {
     console.error('RKAS list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -521,6 +541,26 @@ export async function POST(request: Request) {
 
     const data = parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
+
+    // Deduplicate: remove other RKAS files with the same bulan+tahun
+    if (data.bulan && data.tahun) {
+      const existingFiles = fs.readdirSync(UPLOAD_DIR)
+        .filter(f => isRKASFile(f) && f !== file.name);
+      for (const existing of existingFiles) {
+        try {
+          const existingData = parseRKASFile(existing);
+          if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+            const oldPath = path.join(UPLOAD_DIR, existing);
+            const oldCache = getCacheKey(existing);
+            try { fs.unlinkSync(oldPath); } catch {}
+            try { fs.unlinkSync(oldCache); } catch {}
+          }
+        } catch {}
+      }
+      // Invalidate cache for new file
+      const newCache = getCacheKey(file.name);
+      try { fs.unlinkSync(newCache); } catch {}
+    }
 
     return NextResponse.json({ success: true, data });
   } catch (error: any) {
