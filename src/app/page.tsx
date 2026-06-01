@@ -57,6 +57,27 @@ interface RKASMonth {
   penerimaan: RKASPenerimaanItem[]; standarList: RKASStandar[]; allItems: RKASItem[];
 }
 
+interface SPJItem {
+  kodeRekening: string; kodeProgram: string; standarKode: string; standarNama: string;
+  uraian: string; anggaran: number; realisasi: number; selisih: number;
+  persenRealisasi: number; status: 'lengkap' | 'sebagian' | 'belum' | 'lebih';
+}
+interface SPJStandarGroup {
+  kode: string; nama: string; anggaran: number; realisasi: number; selisih: number;
+  persenRealisasi: number; items: SPJItem[];
+}
+interface SPJMonth {
+  bulan: string; tahun: string; rkasFileName: string; bkuFileName: string;
+  totalAnggaran: number; totalRealisasi: number; totalSelisih: number; persenRealisasi: number;
+  standarGroups: SPJStandarGroup[];
+  unmatchedBKU: { kodeRekening: string; kodeKegiatan: string; uraian: string; jumlah: number }[];
+  unmatchedRKAS: { kodeRekening: string; kodeProgram: string; uraian: string; jumlah: number }[];
+}
+interface SPJSummary {
+  bulanan: SPJMonth[];
+  tahunan: { tahun: string; totalAnggaran: number; totalRealisasi: number; totalSelisih: number; persenRealisasi: number; standarGroups: SPJStandarGroup[] } | null;
+}
+
 interface BKUPajakTransaction {
   tanggal: string; noKode: string; uraian: string;
   ppn: number; pph21: number; pph23: number; pph4: number; sspd: number;
@@ -144,6 +165,10 @@ export default function Home() {
   const [bkuPajakUploading, setBkuPajakUploading] = useState(false)
   const [selectedBkuPajakMonth, setSelectedBkuPajakMonth] = useState<number>(0)
   const [bkuPajakSearchTerm, setBkuPajakSearchTerm] = useState('')
+  const [spjData, setSpjData] = useState<SPJSummary | null>(null)
+  const [spjLoading, setSpjLoading] = useState(false)
+  const [selectedSpjMonth, setSelectedSpjMonth] = useState<number>(-1) // -1 = tahunan view
+  const [spjSearchTerm, setSpjSearchTerm] = useState('')
   const [toastMessages, setToastMessages] = useState<{ id: number; message: string; type: 'info' | 'warning' | 'success' }[]>([])
   const bkuFileInputRef = useRef<HTMLInputElement>(null)
   const rkasFileInputRef = useRef<HTMLInputElement>(null)
@@ -151,7 +176,7 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak() }, [])
+  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
@@ -369,6 +394,19 @@ export default function Home() {
     } catch {}
   }
 
+  const loadSPJ = async () => {
+    setSpjLoading(true)
+    try {
+      const res = await fetch('/api/pdf/spj')
+      if (res.ok) { const data = await res.json(); setSpjData(data) }
+    } catch {} finally { setSpjLoading(false) }
+  }
+
+  // Reload SPJ when RKAS or BKU data changes
+  useEffect(() => {
+    if (rkasMonths.length > 0 || bkuMonths.length > 0) { loadSPJ() }
+  }, [rkasMonths, bkuMonths])
+
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }
   const goToPage = (page: number) => { if (pdfData && page >= 1 && page <= pdfData.pageCount) setCurrentPage(page) }
   const handlePageInput = (value: string) => { setPageInputValue(value); const page = parseInt(value); if (!isNaN(page) && page >= 1 && page <= (pdfData?.pageCount || 1)) setCurrentPage(page) }
@@ -564,6 +602,7 @@ export default function Home() {
               <TabsList className="h-8">
                 <TabsTrigger value="dashboard" className="text-xs gap-1 px-2.5"><PieChart className="h-3 w-3" />Dashboard</TabsTrigger>
                 <TabsTrigger value="rkas" className="text-xs gap-1 px-2.5"><ClipboardList className="h-3 w-3" />RKAS</TabsTrigger>
+                <TabsTrigger value="spj" className="text-xs gap-1 px-2.5"><FileSpreadsheet className="h-3 w-3" />SPJ</TabsTrigger>
                 <TabsTrigger value="bku" className="text-xs gap-1 px-2.5"><Receipt className="h-3 w-3" />BKU</TabsTrigger>
                 <TabsTrigger value="bku-pajak" className="text-xs gap-1 px-2.5"><Scale className="h-3 w-3" />BKU Pajak</TabsTrigger>
                 <TabsTrigger value="viewer" className="text-xs gap-1 px-2.5"><FileText className="h-3 w-3" />Dokumen</TabsTrigger>
@@ -1273,6 +1312,315 @@ export default function Home() {
                         </div>
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* === SPJ TAB === */}
+            <TabsContent value="spj" className="flex-1 m-0 min-h-0 overflow-auto">
+              <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
+                {spjLoading ? (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[1,2,3,4].map(i => <Skeleton key={i} className="h-20 rounded-lg" />)}
+                    </div>
+                    <Skeleton className="h-64 rounded-lg" />
+                  </div>
+                ) : !spjData || (spjData.bulanan.length === 0 && !spjData.tahunan) ? (
+                  <Card className="border-dashed">
+                    <CardContent className="py-16 text-center space-y-3">
+                      <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mx-auto">
+                        <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold">Belum ada data SPJ</h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Import file RKAS dan BKU untuk melihat pencocokan Surat Pertanggungjawaban
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <>
+                    {/* ===== SPJ Summary KPI ===== */}
+                    {(() => {
+                      const src = selectedSpjMonth === -1 ? spjData.tahunan : spjData.bulanan[selectedSpjMonth]
+                      if (!src) return null
+                      return (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
+                            <CardContent className="pt-3 pb-2 px-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <ClipboardList className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                                <p className="text-[10px] text-muted-foreground">Anggaran (RKAS)</p>
+                              </div>
+                              <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{fmtRp(src.totalAnggaran)}</p>
+                            </CardContent>
+                          </Card>
+                          <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
+                            <CardContent className="pt-3 pb-2 px-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Receipt className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                                <p className="text-[10px] text-muted-foreground">Realisasi (BKU)</p>
+                              </div>
+                              <p className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(src.totalRealisasi)}</p>
+                            </CardContent>
+                          </Card>
+                          <Card className={src.totalSelisih >= 0 ? 'border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30' : 'border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-950/30 dark:to-rose-950/30'}>
+                            <CardContent className="pt-3 pb-2 px-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                {src.totalSelisih >= 0 ? <Minus className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /> : <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />}
+                                <p className="text-[10px] text-muted-foreground">{src.totalSelisih >= 0 ? 'Sisa Anggaran' : 'Defisit'}</p>
+                              </div>
+                              <p className={`text-sm font-bold ${src.totalSelisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{fmtRp(Math.abs(src.totalSelisih))}</p>
+                            </CardContent>
+                          </Card>
+                          <Card className="border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30">
+                            <CardContent className="pt-3 pb-2 px-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                <TrendingUp className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
+                                <p className="text-[10px] text-muted-foreground">% Pertanggungjawaban</p>
+                              </div>
+                              <p className="text-sm font-bold text-violet-700 dark:text-violet-300">{src.persenRealisasi}%</p>
+                            </CardContent>
+                          </Card>
+                        </div>
+                      )
+                    })()}
+
+                    {/* ===== Period Selector ===== */}
+                    <Card>
+                      <CardContent className="py-2.5 px-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] text-muted-foreground font-medium shrink-0">Periode:</span>
+                          {spjData.tahunan && (
+                            <Button
+                              variant={selectedSpjMonth === -1 ? 'default' : 'outline'}
+                              size="sm" className="h-7 text-[11px] gap-1"
+                              onClick={() => setSelectedSpjMonth(-1)}
+                            >
+                              <Calendar className="h-3 w-3" /> Tahunan {spjData.tahunan.tahun}
+                            </Button>
+                          )}
+                          {spjData.bulanan.map((m, idx) => (
+                            <Button
+                              key={idx}
+                              variant={selectedSpjMonth === idx ? 'default' : 'outline'}
+                              size="sm" className="h-7 text-[11px] gap-1"
+                              onClick={() => setSelectedSpjMonth(idx)}
+                            >
+                              <Calendar className="h-3 w-3" /> {MONTH_NAMES[m.bulan] || m.bulan.slice(0,3)} {m.tahun}
+                            </Button>
+                          ))}
+                          {spjLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* ===== SPJ Detail Table ===== */}
+                    {(() => {
+                      const src = selectedSpjMonth === -1 ? spjData.tahunan : spjData.bulanan[selectedSpjMonth]
+                      if (!src) return <div className="text-center py-8 text-muted-foreground text-sm">Pilih periode untuk melihat SPJ</div>
+
+                      const filteredGroups = src.standarGroups.map(g => ({
+                        ...g,
+                        items: g.items.filter(item =>
+                          !spjSearchTerm ||
+                          item.uraian.toLowerCase().includes(spjSearchTerm.toLowerCase()) ||
+                          item.kodeRekening.includes(spjSearchTerm) ||
+                          item.kodeProgram.includes(spjSearchTerm) ||
+                          item.standarNama.toLowerCase().includes(spjSearchTerm.toLowerCase())
+                        )
+                      })).filter(g => g.items.length > 0)
+
+                      return (
+                        <>
+                          {/* Search */}
+                          <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                            <Input
+                              placeholder="Cari uraian, kode rekening, atau standar..."
+                              value={spjSearchTerm}
+                              onChange={e => setSpjSearchTerm(e.target.value)}
+                              className="pl-9 h-8 text-xs"
+                            />
+                          </div>
+
+                          {/* Status Legend */}
+                          <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
+                            <span className="font-medium">Status:</span>
+                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Lengkap (≥95%)</span>
+                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Sebagian (1-94%)</span>
+                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-400" /> Belum (0%)</span>
+                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-600" /> Lebih (&gt;100%)</span>
+                          </div>
+
+                          {/* Per Standar Groups */}
+                          {filteredGroups.map(group => {
+                            const IconComp = STANDAR_ICONS[group.kode] || FileText
+                            return (
+                              <Card key={group.kode}>
+                                <CardHeader className="pb-2">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <div className="h-7 w-7 rounded-md flex items-center justify-center" style={{ backgroundColor: `${CHART_COLORS[(['02','03','04','05','06','07','08'].indexOf(group.kode) >= 0 ? ['02','03','04','05','06','07','08'].indexOf(group.kode) : 7) % CHART_COLORS.length]}20` }}>
+                                        <IconComp className="h-3.5 w-3.5" style={{ color: CHART_COLORS[(['02','03','04','05','06','07','08'].indexOf(group.kode) >= 0 ? ['02','03','04','05','06','07','08'].indexOf(group.kode) : 7) % CHART_COLORS.length] }} />
+                                      </div>
+                                      <div>
+                                        <CardTitle className="text-xs">{group.nama}</CardTitle>
+                                        <p className="text-[10px] text-muted-foreground">{group.items.length} pos anggaran</p>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="flex items-center gap-2 text-[11px]">
+                                        <span className="text-muted-foreground">Anggaran:</span>
+                                        <span className="font-semibold text-emerald-600">{fmtRp(group.anggaran)}</span>
+                                      </div>
+                                      <div className="flex items-center gap-2 text-[11px]">
+                                        <span className="text-muted-foreground">Realisasi:</span>
+                                        <span className="font-semibold text-amber-600">{fmtRp(group.realisasi)}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  {/* Progress bar */}
+                                  <div className="mt-2">
+                                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-full transition-all ${
+                                          group.persenRealisasi >= 95 ? 'bg-emerald-500' :
+                                          group.persenRealisasi >= 50 ? 'bg-amber-500' :
+                                          group.persenRealisasi > 0 ? 'bg-red-400' : 'bg-gray-300'
+                                        }`}
+                                        style={{ width: `${Math.min(group.persenRealisasi, 100)}%` }}
+                                      />
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-0.5">
+                                      <span>{group.persenRealisasi}% terealisasi</span>
+                                      <span>Selisih: {fmtRp(group.selisih)}</span>
+                                    </div>
+                                  </div>
+                                </CardHeader>
+                                <CardContent className="pt-0">
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-[11px]">
+                                      <thead>
+                                        <tr className="border-b">
+                                          <th className="text-left py-1.5 px-1 font-medium text-muted-foreground w-6">#</th>
+                                          <th className="text-left py-1.5 px-1 font-medium text-muted-foreground">Kode Rekening</th>
+                                          <th className="text-left py-1.5 px-1 font-medium text-muted-foreground">Uraian</th>
+                                          <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Anggaran</th>
+                                          <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Realisasi</th>
+                                          <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Selisih</th>
+                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-16">%</th>
+                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-8">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {group.items.map((item, idx) => (
+                                          <tr key={idx} className="border-b last:border-0 hover:bg-muted/50">
+                                            <td className="py-1.5 px-1 text-muted-foreground">{idx + 1}</td>
+                                            <td className="py-1.5 px-1 font-mono text-[10px]">{item.kodeRekening}</td>
+                                            <td className="py-1.5 px-1 max-w-[200px] truncate" title={item.uraian}>{item.uraian}</td>
+                                            <td className="py-1.5 px-1 text-right font-medium text-emerald-700 dark:text-emerald-300">{fmtRp(item.anggaran)}</td>
+                                            <td className="py-1.5 px-1 text-right font-medium text-amber-700 dark:text-amber-300">{fmtRp(item.realisasi)}</td>
+                                            <td className={`py-1.5 px-1 text-right font-medium ${item.selisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{fmtRp(item.selisih)}</td>
+                                            <td className="py-1.5 px-1 text-center font-medium">{item.persenRealisasi > 0 ? `${item.persenRealisasi}%` : '-'}</td>
+                                            <td className="py-1.5 px-1 text-center">
+                                              <span className={`inline-block h-2.5 w-2.5 rounded-full ${
+                                                item.status === 'lengkap' ? 'bg-emerald-500' :
+                                                item.status === 'sebagian' ? 'bg-amber-500' :
+                                                item.status === 'lebih' ? 'bg-rose-600' : 'bg-red-400'
+                                              }`} title={
+                                                item.status === 'lengkap' ? 'Terealisasi lengkap' :
+                                                item.status === 'sebagian' ? 'Terealisasi sebagian' :
+                                                item.status === 'lebih' ? 'Over-realized' : 'Belum terealisasi'
+                                              } />
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            )
+                          })}
+
+                          {/* Unmatched Items */}
+                          {(() => {
+                            const monthData = selectedSpjMonth === -1 ? null : spjData.bulanan[selectedSpjMonth]
+                            if (!monthData) return null
+                            return (
+                              (monthData.unmatchedBKU.length > 0 || monthData.unmatchedRKAS.length > 0) ? (
+                                <Card className="border-dashed">
+                                  <CardHeader className="pb-2">
+                                    <CardTitle className="text-xs flex items-center gap-2">
+                                      <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+                                      Pos Tanpa Cocokan
+                                    </CardTitle>
+                                  </CardHeader>
+                                  <CardContent className="space-y-3">
+                                    {monthData.unmatchedBKU.length > 0 && (
+                                      <div>
+                                        <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300 mb-1">Realisasi tanpa anggaran RKAS (BKU):</p>
+                                        <div className="space-y-0.5">
+                                          {monthData.unmatchedBKU.map((u, i) => (
+                                            <div key={i} className="flex items-center gap-2 text-[10px]">
+                                              <code className="font-mono text-muted-foreground">{u.kodeRekening}</code>
+                                              <span className="truncate flex-1">{u.uraian}</span>
+                                              <span className="font-medium text-amber-600">{fmtRp(u.jumlah)}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                    {monthData.unmatchedRKAS.length > 0 && (
+                                      <div>
+                                        <p className="text-[10px] font-medium text-red-700 dark:text-red-300 mb-1">Anggaran tanpa realisasi BKU (belum dibelanjakan):</p>
+                                        <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                                          {monthData.unmatchedRKAS.map((u, i) => (
+                                            <div key={i} className="flex items-center gap-2 text-[10px]">
+                                              <code className="font-mono text-muted-foreground">{u.kodeRekening}</code>
+                                              <span className="truncate flex-1">{u.uraian}</span>
+                                              <span className="font-medium text-red-600">{fmtRp(u.jumlah)}</span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </CardContent>
+                                </Card>
+                              ) : null
+                            )
+                          })()}
+
+                          {/* SPJ Bar Chart - Per Standar Comparison */}
+                          {src.standarGroups.length > 1 && (
+                            <Card>
+                              <CardHeader className="pb-2"><CardTitle className="text-sm">Perbandingan Anggaran vs Realisasi per Standar SNP</CardTitle></CardHeader>
+                              <CardContent>
+                                <ResponsiveContainer width="100%" height={280}>
+                                  <BarChart data={src.standarGroups.map(g => ({
+                                    name: g.nama.replace('Standar ', ''),
+                                    Anggaran: g.anggaran,
+                                    Realisasi: g.realisasi,
+                                  }))} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis fontSize={9} />
+                                    <YAxis tickFormatter={(v: number) => `${(v/1000000).toFixed(0)}jt`} fontSize={10} />
+                                    <Tooltip formatter={(v: number) => fmtRp(v)} />
+                                    <Legend wrapperStyle={{ fontSize: '11px' }} />
+                                    <Bar dataKey="Anggaran" fill="#10b981" radius={[4, 4, 0, 0]} />
+                                    <Bar dataKey="Realisasi" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              </CardContent>
+                            </Card>
+                          )}
+                        </>
+                      )
+                    })()}
                   </>
                 )}
               </div>
