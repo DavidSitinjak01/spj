@@ -44,8 +44,29 @@ model DataSekolah {
   nipPenerima     String   @default("")
   logoKiriUrl     String   @default("")  // base64 data URL of left logo (e.g., Garuda/national emblem)
   logoKananUrl    String   @default("")  // base64 data URL of right logo (e.g., school logo)
+  logoKiriLebar   Float    @default(2.5) // width in cm
+  logoKiriTinggi  Float    @default(3.0) // height in cm
+  logoKananLebar  Float    @default(2.5) // width in cm
+  logoKananTinggi Float    @default(3.0) // height in cm
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  kopRows KopRow[]
+}
+
+model KopRow {
+  id            String   @id @default(cuid())
+  dataSekolahId String
+  dataSekolah   DataSekolah @relation(fields: [dataSekolahId], references: [id], onDelete: Cascade)
+  urutan        Int      @default(0)     // order/position (1 = first row)
+  teks          String   @default("")    // text content (e.g., "PEMERINTAH KABUPATEN TANGERANG")
+  fontFamily    String   @default("Times New Roman")  // font family
+  fontSize      Float    @default(12)    // font size in pt
+  bold          Boolean  @default(false) // bold text
+  italic        Boolean  @default(false) // italic text
+  uppercase     Boolean  @default(false) // transform to uppercase
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model BPU {

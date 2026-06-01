@@ -23,6 +23,10 @@ const defaultDataSekolah = {
   nipPenerima: '',
   logoKiriUrl: '',
   logoKananUrl: '',
+  logoKiriLebar: 2.5,
+  logoKiriTinggi: 3.0,
+  logoKananLebar: 2.5,
+  logoKananTinggi: 3.0,
   createdAt: null as string | null,
   updatedAt: null as string | null,
 };
@@ -154,7 +158,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    const fields = {
+    const fields: Record<string, any> = {
       namaSekolah: typeof body.namaSekolah === 'string' ? body.namaSekolah : '',
       npsn: typeof body.npsn === 'string' ? body.npsn : '',
       alamat: typeof body.alamat === 'string' ? body.alamat : '',
@@ -169,6 +173,12 @@ export async function POST(request: Request) {
       penerimaBarang: typeof body.penerimaBarang === 'string' ? body.penerimaBarang : '',
       nipPenerima: typeof body.nipPenerima === 'string' ? body.nipPenerima : '',
     };
+
+    // Logo dimensions (optional — only update if provided)
+    if (typeof body.logoKiriLebar === 'number') fields.logoKiriLebar = body.logoKiriLebar;
+    if (typeof body.logoKiriTinggi === 'number') fields.logoKiriTinggi = body.logoKiriTinggi;
+    if (typeof body.logoKananLebar === 'number') fields.logoKananLebar = body.logoKananLebar;
+    if (typeof body.logoKananTinggi === 'number') fields.logoKananTinggi = body.logoKananTinggi;
 
     // Find the existing record (should be at most one)
     const existing = await db.dataSekolah.findFirst();

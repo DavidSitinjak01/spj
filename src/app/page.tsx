@@ -20,6 +20,7 @@ import {
   Receipt, FilePlus2, ArrowRight, Minus, Plus, Trash2, ClipboardList,
   Scale, Package, Store, FileCheck, ClipboardPaste, ShieldCheck, Printer,
   Database, ChevronUp, ImagePlus, Image as ImageIcon,
+  ArrowUp, ArrowDown, Bold, Italic, Type, GripVertical, AlignCenter,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -81,6 +82,17 @@ interface SPJSummary {
 }
 
 type SPJDocType = 'surat-pesanan' | 'surat-balasan' | 'bast' | 'dokumen-perencanaan' | 'surat-hasil-pemeriksaan'
+
+interface KopRowData {
+  id: string
+  urutan: number
+  teks: string
+  fontFamily: string
+  fontSize: number
+  bold: boolean
+  italic: boolean
+  uppercase: boolean
+}
 
 interface BKUPajakTransaction {
   tanggal: string; noKode: string; uraian: string;
@@ -191,12 +203,17 @@ export default function Home() {
   const [tokoSearch, setTokoSearch] = useState('')
 
   // --- Data Sekolah states ---
-  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:'', logoKiriUrl:'', logoKananUrl:''})
+  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:'', logoKiriUrl:'', logoKananUrl:'', logoKiriLebar:2.5, logoKiriTinggi:3, logoKananLebar:2.5, logoKananTinggi:3})
   const [sekolahLoading, setSekolahLoading] = useState(false)
   const [sekolahSaving, setSekolahSaving] = useState(false)
   const [logoUploading, setLogoUploading] = useState<'kiri'|'kanan'|null>(null)
   const logoKiriInputRef = useRef<HTMLInputElement>(null)
   const logoKananInputRef = useRef<HTMLInputElement>(null)
+
+  // --- KOP Row states ---
+  const [kopRows, setKopRows] = useState<KopRowData[]>([])
+  const [kopRowLoading, setKopRowLoading] = useState(false)
+  const [kopRowSaving, setKopRowSaving] = useState<string|null>(null) // id of row being saved
 
   // --- Master BPU states ---
   const [bpuList, setBpuList] = useState<any[]>([])
@@ -218,7 +235,7 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ(); loadToko(); loadSekolah(); loadBPU(); loadBNU() }, [])
+  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ(); loadToko(); loadSekolah(); loadKopRows(); loadBPU(); loadBNU() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
@@ -486,6 +503,113 @@ export default function Home() {
       else { addToast('Gagal menyimpan data sekolah', 'warning') }
     } catch { addToast('Gagal menyimpan data sekolah', 'warning') }
     finally { setSekolahSaving(false) }
+  }
+
+  // --- KOP Row functions ---
+  const loadKopRows = async () => {
+    setKopRowLoading(true)
+    try {
+      const res = await fetch('/api/master/sekolah/kop-row')
+      if (res.ok) {
+        const data = await res.json()
+        setKopRows(data.data || [])
+      }
+    } catch {} finally { setKopRowLoading(false) }
+  }
+
+  const addKopRow = async () => {
+    try {
+      const res = await fetch('/api/master/sekolah/kop-row', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teks: '',
+          fontFamily: 'Times New Roman',
+          fontSize: 12,
+          bold: false,
+          italic: false,
+          uppercase: false,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setKopRows(prev => [...prev, data.data])
+        addToast('Baris KOP ditambahkan', 'success')
+      }
+    } catch { addToast('Gagal menambah baris KOP', 'warning') }
+  }
+
+  // Debounce timers for KOP row updates
+  const kopRowDebounceRef = useRef<Record<string, NodeJS.Timeout>>({})
+  const kopRowPendingRef = useRef<Record<string, Partial<KopRowData>>>({})
+
+  const updateKopRow = (id: string, updates: Partial<KopRowData>) => {
+    // Optimistic update
+    setKopRows(prev => prev.map(r => r.id === id ? { ...r, ...updates } : r))
+
+    // Accumulate pending updates
+    kopRowPendingRef.current[id] = { ...kopRowPendingRef.current[id], ...updates }
+
+    // Debounced save
+    if (kopRowDebounceRef.current[id]) {
+      clearTimeout(kopRowDebounceRef.current[id])
+    }
+    kopRowDebounceRef.current[id] = setTimeout(async () => {
+      const pendingUpdates = { ...kopRowPendingRef.current[id] }
+      delete kopRowPendingRef.current[id]
+      setKopRowSaving(id)
+      try {
+        const res = await fetch('/api/master/sekolah/kop-row', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, ...pendingUpdates }),
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setKopRows(prev => prev.map(r => r.id === id ? data.data : r))
+        } else {
+          await loadKopRows()
+          addToast('Gagal menyimpan perubahan', 'warning')
+        }
+      } catch {
+        await loadKopRows()
+        addToast('Gagal menyimpan perubahan', 'warning')
+      } finally { setKopRowSaving(null) }
+    }, 600)
+  }
+
+  const deleteKopRow = async (id: string) => {
+    try {
+      const res = await fetch(`/api/master/sekolah/kop-row?id=${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        setKopRows(prev => prev.filter(r => r.id !== id))
+        addToast('Baris KOP dihapus', 'success')
+      }
+    } catch { addToast('Gagal menghapus baris KOP', 'warning') }
+  }
+
+  const moveKopRow = async (id: string, direction: 'up' | 'down') => {
+    const sorted = [...kopRows].sort((a, b) => a.urutan - b.urutan)
+    const idx = sorted.findIndex(r => r.id === id)
+    if (direction === 'up' && idx <= 0) return
+    if (direction === 'down' && idx >= sorted.length - 1) return
+
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    const temp = sorted[idx].urutan
+    sorted[idx].urutan = sorted[swapIdx].urutan
+    sorted[swapIdx].urutan = temp
+
+    // Optimistic
+    setKopRows([...sorted])
+
+    // Save reordering
+    try {
+      await fetch('/api/master/sekolah/kop-row', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orders: sorted.map(r => ({ id: r.id, urutan: r.urutan })) }),
+      })
+    } catch { addToast('Gagal mengubah urutan', 'warning') }
   }
 
   // Logo upload handler
@@ -1694,7 +1818,7 @@ export default function Home() {
                       </div>
                       <Button size="sm" className="h-7 text-[11px] gap-1" onClick={saveSekolah} disabled={sekolahSaving}>
                         {sekolahSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-                        Simpan
+                        Simpan Semua
                       </Button>
                     </div>
 
@@ -1702,55 +1826,50 @@ export default function Home() {
                       <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}</div>
                     ) : (
                       <div className="grid gap-4">
-                        {/* Logo Sekolah */}
+                        {/* ===== KOP SEKOLAH EDITOR ===== */}
                         <Card>
                           <CardHeader className="pb-2">
-                            <CardTitle className="text-xs flex items-center gap-1.5">
-                              <ImageIcon className="h-3.5 w-3.5" />
-                              Logo Kop Sekolah
-                            </CardTitle>
-                            <p className="text-[10px] text-muted-foreground">Logo untuk KOP surat dokumen SPJ (maks. 4 MB per logo, format PNG/JPG/WebP/SVG)</p>
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <CardTitle className="text-xs flex items-center gap-1.5">
+                                  <AlignCenter className="h-3.5 w-3.5" />
+                                  KOP Sekolah
+                                </CardTitle>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">Atur logo, ukuran, dan baris teks untuk kop surat dokumen SPJ</p>
+                              </div>
+                              <Button size="sm" className="h-7 text-[11px] gap-1" onClick={saveSekolah} disabled={sekolahSaving}>
+                                {sekolahSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                                Simpan Ukuran
+                              </Button>
+                            </div>
                           </CardHeader>
-                          <CardContent>
+                          <CardContent className="space-y-4">
+                            {/* --- Logo Section --- */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                               {/* Logo Kiri */}
                               <div className="space-y-2">
                                 <label className="text-[11px] font-medium text-muted-foreground">Logo Kiri (Lambang Negara)</label>
                                 <div className="relative group border-2 border-dashed rounded-lg overflow-hidden transition-colors hover:border-primary/50 bg-muted/30"
-                                  style={{ minHeight: '120px' }}>
+                                  style={{ minHeight: '100px' }}>
                                   {sekolahData.logoKiriUrl ? (
                                     <div className="flex flex-col items-center justify-center p-3 h-full">
                                       <img
                                         src={sekolahData.logoKiriUrl}
                                         alt="Logo Kiri"
-                                        className="max-h-20 max-w-full object-contain"
+                                        style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 20}px`, width: `${(sekolahData.logoKiriLebar || 2.5) * 20}px`, objectFit: 'contain' }}
                                       />
                                       <div className="mt-2 flex gap-1.5">
-                                        <Button
-                                          variant="outline" size="sm"
-                                          className="h-6 text-[10px] gap-1"
-                                          onClick={() => logoKiriInputRef.current?.click()}
-                                          disabled={logoUploading === 'kiri'}
-                                        >
+                                        <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => logoKiriInputRef.current?.click()} disabled={logoUploading === 'kiri'}>
                                           {logoUploading === 'kiri' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
                                           Ganti
                                         </Button>
-                                        <Button
-                                          variant="outline" size="sm"
-                                          className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive"
-                                          onClick={() => handleLogoDelete('kiri')}
-                                        >
-                                          <Trash2 className="h-3 w-3" />
-                                          Hapus
+                                        <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive" onClick={() => handleLogoDelete('kiri')}>
+                                          <Trash2 className="h-3 w-3" /> Hapus
                                         </Button>
                                       </div>
                                     </div>
                                   ) : (
-                                    <div
-                                      className="flex flex-col items-center justify-center p-4 cursor-pointer h-full"
-                                      style={{ minHeight: '120px' }}
-                                      onClick={() => logoKiriInputRef.current?.click()}
-                                    >
+                                    <div className="flex flex-col items-center justify-center p-4 cursor-pointer h-full" style={{ minHeight: '100px' }} onClick={() => logoKiriInputRef.current?.click()}>
                                       {logoUploading === 'kiri' ? (
                                         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                                       ) : (
@@ -1763,57 +1882,43 @@ export default function Home() {
                                     </div>
                                   )}
                                 </div>
-                                <input
-                                  ref={logoKiriInputRef}
-                                  type="file"
-                                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0]
-                                    if (file) handleLogoUpload('kiri', file)
-                                    e.target.value = ''
-                                  }}
-                                />
+                                <input ref={logoKiriInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleLogoUpload('kiri', file); e.target.value = '' }} />
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[10px] text-muted-foreground">Lebar (cm)</label>
+                                    <Input type="number" step="0.1" min="0.5" max="10" className="h-7 text-[11px] mt-0.5" value={sekolahData.logoKiriLebar ?? 2.5} onChange={e => setSekolahData(prev => ({...prev, logoKiriLebar: parseFloat(e.target.value) || 2.5}))} />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-muted-foreground">Tinggi (cm)</label>
+                                    <Input type="number" step="0.1" min="0.5" max="10" className="h-7 text-[11px] mt-0.5" value={sekolahData.logoKiriTinggi ?? 3} onChange={e => setSekolahData(prev => ({...prev, logoKiriTinggi: parseFloat(e.target.value) || 3}))} />
+                                  </div>
+                                </div>
                               </div>
 
                               {/* Logo Kanan */}
                               <div className="space-y-2">
                                 <label className="text-[11px] font-medium text-muted-foreground">Logo Kanan (Logo Sekolah)</label>
                                 <div className="relative group border-2 border-dashed rounded-lg overflow-hidden transition-colors hover:border-primary/50 bg-muted/30"
-                                  style={{ minHeight: '120px' }}>
+                                  style={{ minHeight: '100px' }}>
                                   {sekolahData.logoKananUrl ? (
                                     <div className="flex flex-col items-center justify-center p-3 h-full">
                                       <img
                                         src={sekolahData.logoKananUrl}
                                         alt="Logo Kanan"
-                                        className="max-h-20 max-w-full object-contain"
+                                        style={{ height: `${(sekolahData.logoKananTinggi || 3) * 20}px`, width: `${(sekolahData.logoKananLebar || 2.5) * 20}px`, objectFit: 'contain' }}
                                       />
                                       <div className="mt-2 flex gap-1.5">
-                                        <Button
-                                          variant="outline" size="sm"
-                                          className="h-6 text-[10px] gap-1"
-                                          onClick={() => logoKananInputRef.current?.click()}
-                                          disabled={logoUploading === 'kanan'}
-                                        >
+                                        <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => logoKananInputRef.current?.click()} disabled={logoUploading === 'kanan'}>
                                           {logoUploading === 'kanan' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
                                           Ganti
                                         </Button>
-                                        <Button
-                                          variant="outline" size="sm"
-                                          className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive"
-                                          onClick={() => handleLogoDelete('kanan')}
-                                        >
-                                          <Trash2 className="h-3 w-3" />
-                                          Hapus
+                                        <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive" onClick={() => handleLogoDelete('kanan')}>
+                                          <Trash2 className="h-3 w-3" /> Hapus
                                         </Button>
                                       </div>
                                     </div>
                                   ) : (
-                                    <div
-                                      className="flex flex-col items-center justify-center p-4 cursor-pointer h-full"
-                                      style={{ minHeight: '120px' }}
-                                      onClick={() => logoKananInputRef.current?.click()}
-                                    >
+                                    <div className="flex flex-col items-center justify-center p-4 cursor-pointer h-full" style={{ minHeight: '100px' }} onClick={() => logoKananInputRef.current?.click()}>
                                       {logoUploading === 'kanan' ? (
                                         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                                       ) : (
@@ -1826,17 +1931,182 @@ export default function Home() {
                                     </div>
                                   )}
                                 </div>
-                                <input
-                                  ref={logoKananInputRef}
-                                  type="file"
-                                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0]
-                                    if (file) handleLogoUpload('kanan', file)
-                                    e.target.value = ''
-                                  }}
-                                />
+                                <input ref={logoKananInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleLogoUpload('kanan', file); e.target.value = '' }} />
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[10px] text-muted-foreground">Lebar (cm)</label>
+                                    <Input type="number" step="0.1" min="0.5" max="10" className="h-7 text-[11px] mt-0.5" value={sekolahData.logoKananLebar ?? 2.5} onChange={e => setSekolahData(prev => ({...prev, logoKananLebar: parseFloat(e.target.value) || 2.5}))} />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] text-muted-foreground">Tinggi (cm)</label>
+                                    <Input type="number" step="0.1" min="0.5" max="10" className="h-7 text-[11px] mt-0.5" value={sekolahData.logoKananTinggi ?? 3} onChange={e => setSekolahData(prev => ({...prev, logoKananTinggi: parseFloat(e.target.value) || 3}))} />
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <Separator />
+
+                            {/* --- KOP Text Rows --- */}
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <h4 className="text-[11px] font-semibold">Baris Teks KOP</h4>
+                                  <p className="text-[10px] text-muted-foreground">Atur teks yang tampil di kop surat (baris per baris)</p>
+                                </div>
+                                <Button size="sm" className="h-7 text-[11px] gap-1" onClick={addKopRow} disabled={kopRowLoading}>
+                                  <Plus className="h-3 w-3" /> Tambah Baris
+                                </Button>
+                              </div>
+
+                              {kopRows.length === 0 ? (
+                                <div className="border-2 border-dashed rounded-lg py-8 text-center bg-muted/20">
+                                  <Type className="h-8 w-8 text-muted-foreground/50 mx-auto mb-2" />
+                                  <p className="text-[11px] text-muted-foreground">Belum ada baris teks KOP</p>
+                                  <p className="text-[10px] text-muted-foreground/60 mt-0.5">Klik &quot;Tambah Baris&quot; untuk menambahkan teks kop surat</p>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row, idx, arr) => (
+                                    <div key={row.id} className="border rounded-lg p-3 bg-card space-y-2">
+                                      <div className="flex items-center gap-2">
+                                        <GripVertical className="h-4 w-4 text-muted-foreground/50 flex-shrink-0" />
+                                        <span className="text-[10px] font-medium text-muted-foreground w-6">#{idx + 1}</span>
+                                        <div className="flex-1">
+                                          <Input
+                                            className="h-8 text-xs"
+                                            placeholder="Teks baris KOP (misal: PEMERINTAH KABUPATEN TANGERANG)"
+                                            value={row.teks}
+                                            onChange={e => updateKopRow(row.id, { teks: e.target.value })}
+                                            style={{ fontFamily: row.fontFamily, fontSize: `${row.fontSize}pt`, fontWeight: row.bold ? 'bold' : 'normal', fontStyle: row.italic ? 'italic' : 'normal', textTransform: row.uppercase ? 'uppercase' : 'none' }}
+                                          />
+                                        </div>
+                                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveKopRow(row.id, 'up')} disabled={idx === 0}>
+                                            <ArrowUp className="h-3.5 w-3.5" />
+                                          </Button>
+                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveKopRow(row.id, 'down')} disabled={idx === arr.length - 1}>
+                                            <ArrowDown className="h-3.5 w-3.5" />
+                                          </Button>
+                                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive hover:text-destructive" onClick={() => deleteKopRow(row.id)}>
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2 flex-wrap pl-8">
+                                        {/* Font Family */}
+                                        <div className="flex items-center gap-1">
+                                          <label className="text-[9px] text-muted-foreground">Font:</label>
+                                          <select
+                                            className="h-6 text-[10px] border rounded px-1 bg-background"
+                                            value={row.fontFamily}
+                                            onChange={e => updateKopRow(row.id, { fontFamily: e.target.value })}
+                                          >
+                                            <option value="Times New Roman">Times New Roman</option>
+                                            <option value="Arial">Arial</option>
+                                            <option value="Courier New">Courier New</option>
+                                            <option value="Georgia">Georgia</option>
+                                            <option value="Verdana">Verdana</option>
+                                            <option value="Trebuchet MS">Trebuchet MS</option>
+                                            <option value="Calibri">Calibri</option>
+                                            <option value="Cambria">Cambria</option>
+                                            <option value="Garamond">Garamond</option>
+                                            <option value="Comic Sans MS">Comic Sans MS</option>
+                                            <option value="Impact">Impact</option>
+                                            <option value="Palatino Linotype">Palatino</option>
+                                            <option value="Tahoma">Tahoma</option>
+                                          </select>
+                                        </div>
+                                        {/* Font Size */}
+                                        <div className="flex items-center gap-1">
+                                          <label className="text-[9px] text-muted-foreground">Ukuran:</label>
+                                          <Input
+                                            type="number"
+                                            min="6"
+                                            max="72"
+                                            step="0.5"
+                                            className="h-6 w-14 text-[10px] px-1"
+                                            value={row.fontSize}
+                                            onChange={e => updateKopRow(row.id, { fontSize: parseFloat(e.target.value) || 12 })}
+                                          />
+                                          <span className="text-[9px] text-muted-foreground">pt</span>
+                                        </div>
+                                        {/* Bold */}
+                                        <Button
+                                          variant={row.bold ? 'default' : 'outline'}
+                                          size="sm"
+                                          className={`h-6 w-7 p-0 ${row.bold ? '' : 'text-muted-foreground'}`}
+                                          onClick={() => updateKopRow(row.id, { bold: !row.bold })}
+                                        >
+                                          <Bold className="h-3 w-3" />
+                                        </Button>
+                                        {/* Italic */}
+                                        <Button
+                                          variant={row.italic ? 'default' : 'outline'}
+                                          size="sm"
+                                          className={`h-6 w-7 p-0 ${row.italic ? '' : 'text-muted-foreground'}`}
+                                          onClick={() => updateKopRow(row.id, { italic: !row.italic })}
+                                        >
+                                          <Italic className="h-3 w-3" />
+                                        </Button>
+                                        {/* Uppercase */}
+                                        <Button
+                                          variant={row.uppercase ? 'default' : 'outline'}
+                                          size="sm"
+                                          className={`h-6 px-1.5 p-0 text-[9px] ${row.uppercase ? '' : 'text-muted-foreground'}`}
+                                          onClick={() => updateKopRow(row.id, { uppercase: !row.uppercase })}
+                                        >
+                                          AA
+                                        </Button>
+                                        {kopRowSaving === row.id && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <Separator />
+
+                            {/* --- KOP Preview --- */}
+                            <div className="space-y-1">
+                              <h4 className="text-[11px] font-semibold">Pratinjau KOP</h4>
+                              <div className="border rounded-lg p-4 bg-white">
+                                <div className="border-b-2 border-black pb-3">
+                                  <div className="flex items-center justify-between">
+                                    <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                      {sekolahData.logoKiriUrl && (
+                                        <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      )}
+                                    </div>
+                                    <div className="text-center flex-1 min-w-0 px-2">
+                                      {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                        <p
+                                          key={row.id}
+                                          style={{
+                                            fontFamily: row.fontFamily,
+                                            fontSize: `${row.fontSize}pt`,
+                                            fontWeight: row.bold ? 'bold' : 'normal',
+                                            fontStyle: row.italic ? 'italic' : 'normal',
+                                            textTransform: row.uppercase ? 'uppercase' : 'none',
+                                            lineHeight: 1.3,
+                                            color: '#000',
+                                          }}
+                                        >
+                                          {row.teks || '........................'}
+                                        </p>
+                                      ))}
+                                      {kopRows.length === 0 && (
+                                        <p className="text-gray-400 text-[10px]">Belum ada baris teks</p>
+                                      )}
+                                    </div>
+                                    <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                      {sekolahData.logoKananUrl && (
+                                        <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </CardContent>
@@ -2636,21 +2906,41 @@ export default function Home() {
                     <div className="border-b-2 border-black pb-3 mb-4">
                       <div className="flex items-center justify-between">
                         {/* Logo Kiri */}
-                        <div className="w-16 flex-shrink-0">
+                        <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
                           {sekolahData.logoKiriUrl && (
-                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" className="h-14 w-14 object-contain" />
+                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
                           )}
                         </div>
-                        {/* Center text */}
-                        <div className="text-center flex-1 min-w-0">
-                          <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
-                          <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
-                          <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                        {/* Center text from KOP rows */}
+                        <div className="text-center flex-1 min-w-0 px-2">
+                          {kopRows.length > 0 ? (
+                            [...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                              <p
+                                key={row.id}
+                                style={{
+                                  fontFamily: row.fontFamily,
+                                  fontSize: `${row.fontSize}pt`,
+                                  fontWeight: row.bold ? 'bold' : 'normal',
+                                  fontStyle: row.italic ? 'italic' : 'normal',
+                                  textTransform: row.uppercase ? 'uppercase' : 'none',
+                                  lineHeight: 1.3,
+                                }}
+                              >
+                                {row.teks || '........................'}
+                              </p>
+                            ))
+                          ) : (
+                            <>
+                              <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                              <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                              <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                            </>
+                          )}
                         </div>
                         {/* Logo Kanan */}
-                        <div className="w-16 flex-shrink-0">
+                        <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
                           {sekolahData.logoKananUrl && (
-                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" className="h-14 w-14 object-contain" />
+                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
                           )}
                         </div>
                       </div>
