@@ -90,9 +90,13 @@ function writeCache(fileName: string, data: CachedData): void {
 
 // --- Vercel Blob helpers ---
 
+/**
+ * Import the Vercel Blob SDK dynamically.
+ * Includes get() for downloading private blobs with proper authentication.
+ */
 async function getBlobModule() {
-  const { put, head, list, del } = await import('@vercel/blob');
-  return { put, head, list, del };
+  const mod = await import('@vercel/blob');
+  return mod;
 }
 
 /**
@@ -109,20 +113,25 @@ export async function uploadToBlob(fileName: string, buffer: Buffer, contentType
 }
 
 /**
- * Download a file from Vercel Blob storage.
- * For private blobs, uses the BLOB_READ_WRITE_TOKEN for authentication.
+ * Download a file from Vercel Blob storage (private store).
+ * Uses the @vercel/blob `get()` function which automatically handles
+ * authentication with BLOB_READ_WRITE_TOKEN for private blobs.
  */
 export async function downloadFromBlob(url: string): Promise<Buffer> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN;
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
-    throw new Error(`Failed to download from blob: ${response.status} ${response.statusText}`);
-  }
-  const arrayBuffer = await response.arrayBuffer();
+  const { get } = await getBlobModule();
+  const blob = await get(url, { access: 'private' });
+  const arrayBuffer = await blob.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/**
+ * Download a file from Vercel Blob by pathname (for private store).
+ * Uses pathname-based access which works without needing the full URL.
+ */
+export async function downloadFromBlobByPathname(pathname: string): Promise<Buffer> {
+  const { get } = await getBlobModule();
+  const blob = await get(pathname, { access: 'private' });
+  const arrayBuffer = await blob.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
 
@@ -212,13 +221,10 @@ export async function getPDFFiles(): Promise<string[]> {
 
 export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
-    // Serverless: download from blob + pdf-parse
-    const blobInfo = await getBlobInfo(fileName);
-    if (!blobInfo) {
-      throw new Error(`PDF file not found in blob storage: ${fileName}`);
-    }
-
-    const buffer = await downloadFromBlob(blobInfo.url);
+    // Serverless: download from private blob using get() + pdf-parse
+    // Use pathname-based download which handles private store authentication automatically
+    const pathname = `${BLOB_PREFIX}${fileName}`;
+    const buffer = await downloadFromBlobByPathname(pathname);
     const parsed = await extractTextWithPdfParse(buffer);
 
     // pdf-parse gives us all text as one string; we split by pages heuristically
@@ -250,7 +256,7 @@ export async function processPDF(fileName: string): Promise<PDFInfo> {
 
     return {
       fileName,
-      filePath: blobInfo.url,
+      filePath: pathname,
       pageCount: parsed.numpages,
       extractedText,
     };
