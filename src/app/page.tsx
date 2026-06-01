@@ -177,7 +177,7 @@ export default function Home() {
   const [spjLoading, setSpjLoading] = useState(false)
   const [selectedSpjMonth, setSelectedSpjMonth] = useState<number>(-1) // -1 = tahunan view
   const [spjSearchTerm, setSpjSearchTerm] = useState('')
-  const [spjSubTab, setSpjSubTab] = useState('rekapitulasi')
+  const [spjSubTab, setSpjSubTab] = useState('master-toko')
   const [spjDocFields, setSpjDocFields] = useState({
     nomorSurat: '',
     tanggalSurat: new Date().toISOString().split('T')[0],
@@ -197,13 +197,39 @@ export default function Home() {
   const [spjSelectedPesanan, setSpjSelectedPesanan] = useState<string>('')
   const [masterDataCollapsed, setMasterDataCollapsed] = useState<Record<string, boolean>>({})
   const [toastMessages, setToastMessages] = useState<{ id: number; message: string; type: 'info' | 'warning' | 'success' }[]>([])
+
+  // --- Master Toko states ---
+  const [tokoList, setTokoList] = useState<any[]>([])
+  const [tokoLoading, setTokoLoading] = useState(false)
+  const [tokoDialog, setTokoDialog] = useState<{open: boolean, mode: 'add'|'edit', data: any}>({open: false, mode: 'add', data: {namaToko: '', direktur: '', noHp: '', alamat: '', kategori: ''}})
+  const [tokoSearch, setTokoSearch] = useState('')
+
+  // --- Data Sekolah states ---
+  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:''})
+  const [sekolahLoading, setSekolahLoading] = useState(false)
+  const [sekolahSaving, setSekolahSaving] = useState(false)
+
+  // --- Master BPU states ---
+  const [bpuList, setBpuList] = useState<any[]>([])
+  const [bpuLoading, setBpuLoading] = useState(false)
+  const [bpuSyncing, setBpuSyncing] = useState(false)
+  const [selectedBpu, setSelectedBpu] = useState<string|null>(null)
+  const [bpuEditFields, setBpuEditFields] = useState<Record<string, {noPesanan: string, tglPesan: string, tokoId: string}>>({})
+
+  // --- Master BNU states ---
+  const [bnuList, setBnuList] = useState<any[]>([])
+  const [bnuLoading, setBnuLoading] = useState(false)
+  const [bnuSyncing, setBnuSyncing] = useState(false)
+  const [selectedBnu, setSelectedBnu] = useState<string|null>(null)
+  const [bnuEditFields, setBnuEditFields] = useState<Record<string, {noPesanan: string, tglPesan: string, tokoId: string}>>({})
+
   const bkuFileInputRef = useRef<HTMLInputElement>(null)
   const rkasFileInputRef = useRef<HTMLInputElement>(null)
   const bkuPajakFileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ() }, [])
+  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ(); loadToko(); loadSekolah(); loadBPU(); loadBNU() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
@@ -429,6 +455,133 @@ export default function Home() {
     } catch {} finally { setSpjLoading(false) }
   }
 
+  const loadToko = async () => {
+    setTokoLoading(true)
+    try {
+      const res = await fetch('/api/master/toko')
+      if (res.ok) { const data = await res.json(); setTokoList(data.data || []) }
+    } catch {} finally { setTokoLoading(false) }
+  }
+
+  const saveToko = async (toko: any) => {
+    try {
+      const res = toko.id
+        ? await fetch('/api/master/toko', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(toko) })
+        : await fetch('/api/master/toko', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(toko) })
+      if (res.ok) { await loadToko(); setTokoDialog({open: false, mode: 'add', data: {namaToko:'', direktur:'', noHp:'', alamat:'', kategori:''}}); addToast(toko.id ? 'Toko berhasil diperbarui' : 'Toko berhasil ditambahkan', 'success') }
+      else { const err = await res.json(); addToast(err.error || 'Gagal menyimpan toko', 'warning') }
+    } catch { addToast('Gagal menyimpan toko', 'warning') }
+  }
+
+  const deleteToko = async (id: string) => {
+    try {
+      const res = await fetch('/api/master/toko', { method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) })
+      if (res.ok) { await loadToko(); addToast('Toko berhasil dihapus', 'success') }
+      else { const err = await res.json(); addToast(err.error || 'Gagal menghapus toko', 'warning') }
+    } catch { addToast('Gagal menghapus toko', 'warning') }
+  }
+
+  const loadSekolah = async () => {
+    setSekolahLoading(true)
+    try {
+      const res = await fetch('/api/master/sekolah')
+      if (res.ok) { const data = await res.json(); if (data.data) setSekolahData(data.data) }
+    } catch {} finally { setSekolahLoading(false) }
+  }
+
+  const saveSekolah = async () => {
+    setSekolahSaving(true)
+    try {
+      const res = await fetch('/api/master/sekolah', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(sekolahData) })
+      if (res.ok) { addToast('Data sekolah berhasil disimpan', 'success') }
+      else { addToast('Gagal menyimpan data sekolah', 'warning') }
+    } catch { addToast('Gagal menyimpan data sekolah', 'warning') }
+    finally { setSekolahSaving(false) }
+  }
+
+  const loadBPU = async () => {
+    setBpuLoading(true)
+    try {
+      const res = await fetch('/api/master/bpu')
+      if (res.ok) { const data = await res.json(); setBpuList(data.data || []) }
+    } catch {} finally { setBpuLoading(false) }
+  }
+
+  const syncBPU = async () => {
+    setBpuSyncing(true)
+    try {
+      const res = await fetch('/api/master/bpu', { method: 'PATCH' })
+      if (res.ok) {
+        const data = await res.json()
+        addToast(`BPU disinkronkan: ${data.summary?.created || 0} baru, ${data.summary?.updated || 0} diperbarui`, 'success')
+        await loadBPU()
+      }
+    } catch { addToast('Gagal sinkronkan BPU', 'warning') }
+    finally { setBpuSyncing(false) }
+  }
+
+  const updateBPU = async (id: string, fields: {noPesanan?: string, tglPesan?: string, tokoId?: string}) => {
+    try {
+      const res = await fetch('/api/master/bpu', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, ...fields}) })
+      if (res.ok) { await loadBPU() }
+    } catch {}
+  }
+
+  const deleteBPU = async (id: string) => {
+    try {
+      const res = await fetch('/api/master/bpu', { method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) })
+      if (res.ok) { addToast('BPU berhasil dihapus', 'success'); setSelectedBpu(null); await loadBPU() }
+    } catch {}
+  }
+
+  const updateBPItemHargaToko2 = async (bpuId: string, items: any[]) => {
+    try {
+      const res = await fetch('/api/master/bpu', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: bpuId, items}) })
+      if (res.ok) { await loadBPU() }
+    } catch {}
+  }
+
+  const loadBNU = async () => {
+    setBnuLoading(true)
+    try {
+      const res = await fetch('/api/master/bnu')
+      if (res.ok) { const data = await res.json(); setBnuList(data.data || []) }
+    } catch {} finally { setBnuLoading(false) }
+  }
+
+  const syncBNU = async () => {
+    setBnuSyncing(true)
+    try {
+      const res = await fetch('/api/master/bnu', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'sync'}) })
+      if (res.ok) {
+        const data = await res.json()
+        addToast(`BNU disinkronkan: ${data.synced || 0} data`, 'success')
+        await loadBNU()
+      }
+    } catch { addToast('Gagal sinkronkan BNU', 'warning') }
+    finally { setBnuSyncing(false) }
+  }
+
+  const updateBNU = async (id: string, fields: {noPesanan?: string, tglPesan?: string, tokoId?: string}) => {
+    try {
+      const res = await fetch('/api/master/bnu', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id, ...fields}) })
+      if (res.ok) { await loadBNU() }
+    } catch {}
+  }
+
+  const deleteBNU = async (id: string) => {
+    try {
+      const res = await fetch('/api/master/bnu', { method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id}) })
+      if (res.ok) { addToast('BNU berhasil dihapus', 'success'); setSelectedBnu(null); await loadBNU() }
+    } catch {}
+  }
+
+  const updateBNUItemHargaToko2 = async (bnuId: string, items: any[]) => {
+    try {
+      const res = await fetch('/api/master/bnu', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: bnuId, items}) })
+      if (res.ok) { await loadBNU() }
+    } catch {}
+  }
 
   // Reload SPJ when RKAS or BKU data changes
   useEffect(() => {
@@ -1374,7 +1527,10 @@ export default function Home() {
                 {/* ===== Sub-Tab Navigation ===== */}
                 <div className="flex items-center gap-1 overflow-x-auto pb-1">
                   {[
-                    { key: 'master-data', label: 'Master Data', icon: Database },
+                    { key: 'master-toko', label: 'Master Toko', icon: Store },
+                    { key: 'data-sekolah', label: 'Data Sekolah', icon: Building2 },
+                    { key: 'master-bpu', label: 'Master BPU', icon: ClipboardList },
+                    { key: 'master-bnu', label: 'Master BNU', icon: Users },
                     { key: 'rekapitulasi', label: 'Rekapitulasi', icon: FileSpreadsheet },
                     { key: 'surat-pesanan', label: 'Surat Pesanan', icon: Package },
                     { key: 'surat-balasan', label: 'Surat Balasan Toko', icon: Store },
@@ -1395,242 +1551,489 @@ export default function Home() {
                   ))}
                 </div>
 
-                {/* ===== MASTER DATA SUB-TAB ===== */}
-                {spjSubTab === 'master-data' && (() => {
-                  // Collect BKU transactions for the selected period
-                  const allTransactions = (() => {
-                    if (selectedSpjMonth === -1) {
-                      // Tahunan: all months
-                      return bkuMonths.flatMap(m => m.transactions)
-                    }
-                    // Specific month
-                    return bkuMonths[selectedSpjMonth]?.transactions || []
-                  })()
+                {/* ===== MASTER TOKO SUB-TAB ===== */}
+                {spjSubTab === 'master-toko' && (
+                  <div className="space-y-4">
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold">Master Toko</h3>
+                        <p className="text-[11px] text-muted-foreground">Kelola database toko/penyedia</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="relative">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                          <Input className="h-7 text-[11px] pl-7 w-48" placeholder="Cari toko..." value={tokoSearch} onChange={e => setTokoSearch(e.target.value)} />
+                        </div>
+                        <Button size="sm" className="h-7 text-[11px] gap-1" onClick={() => setTokoDialog({open: true, mode: 'add', data: {namaToko: '', direktur: '', noHp: '', alamat: '', kategori: ''}})}>
+                          <Plus className="h-3 w-3" /> Tambah Toko
+                        </Button>
+                      </div>
+                    </div>
 
-                  // Filter only pengeluaran > 0
-                  const spendingTransactions = allTransactions.filter(t => t.pengeluaran > 0)
-
-                  // Build RKAS lookup map: compositeKey -> uraian
-                  const rkasLookup = new Map<string, string>()
-                  for (const rkasMonth of rkasMonths) {
-                    for (const item of rkasMonth.allItems) {
-                      const key = compositeKey(item.kodeProgram, item.kodeRekening)
-                      if (!rkasLookup.has(key)) {
-                        rkasLookup.set(key, item.uraian)
-                      }
-                    }
-                  }
-
-                  // Group by noBukti
-                  const grouped = new Map<string, BKUTransaction[]>()
-                  for (const t of spendingTransactions) {
-                    const key = t.noBukti?.trim() || '__TANPA_NO_BUKTI__'
-                    if (!grouped.has(key)) grouped.set(key, [])
-                    grouped.get(key)!.push(t)
-                  }
-
-                  // Sort groups: those with noBukti first, then "Tanpa No. Bukti" last
-                  const sortedGroupKeys = Array.from(grouped.keys()).sort((a, b) => {
-                    if (a === '__TANPA_NO_BUKTI__') return 1
-                    if (b === '__TANPA_NO_BUKTI__') return -1
-                    return a.localeCompare(b)
-                  })
-
-                  // Summary stats
-                  const totalGroups = grouped.size
-                  const totalPengeluaran = spendingTransactions.reduce((s, t) => s + t.pengeluaran, 0)
-                  const assignedGroups = sortedGroupKeys.filter(k => k !== '__TANPA_NO_BUKTI__' && spjPesananMap[k]?.trim()).length
-                  const unassignedGroups = totalGroups - assignedGroups
-
-                  return (
-                    <>
-                      {/* Period Selector */}
-                      <Card>
-                        <CardContent className="py-2.5 px-3">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] text-muted-foreground font-medium shrink-0">Periode:</span>
-                            <Button
-                              variant={selectedSpjMonth === -1 ? 'default' : 'outline'}
-                              size="sm" className="h-7 text-[11px] gap-1"
-                              onClick={() => setSelectedSpjMonth(-1)}
-                            >
-                              <Calendar className="h-3 w-3" /> Tahunan
-                            </Button>
-                            {bkuMonths.map((m, idx) => (
-                              <Button
-                                key={idx}
-                                variant={selectedSpjMonth === idx ? 'default' : 'outline'}
-                                size="sm" className="h-7 text-[11px] gap-1"
-                                onClick={() => setSelectedSpjMonth(idx)}
-                              >
-                                <Calendar className="h-3 w-3" /> {MONTH_NAMES[m.bulan?.toUpperCase()] || m.bulan?.slice(0,3)} {m.tahun}
-                              </Button>
-                            ))}
-                          </div>
+                    {tokoLoading ? (
+                      <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-16 rounded-lg" />)}</div>
+                    ) : tokoList.length === 0 ? (
+                      <Card className="border-dashed">
+                        <CardContent className="py-12 text-center">
+                          <Store className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
+                          <h3 className="text-sm font-semibold">Belum ada data toko</h3>
+                          <p className="text-xs text-muted-foreground mt-1">Tambahkan toko/penyedia untuk keperluan SPJ</p>
                         </CardContent>
                       </Card>
+                    ) : (
+                      <div className="grid gap-3">
+                        {tokoList
+                          .filter(t => !tokoSearch || t.namaToko.toLowerCase().includes(tokoSearch.toLowerCase()) || t.direktur.toLowerCase().includes(tokoSearch.toLowerCase()))
+                          .map(toko => (
+                          <Card key={toko.id} className="overflow-hidden">
+                            <CardContent className="py-3 px-4">
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold truncate">{toko.namaToko}</span>
+                                    {toko.kategori && <Badge variant="outline" className="text-[9px] h-4">{toko.kategori}</Badge>}
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
+                                    {toko.direktur && <span>Direktur: {toko.direktur}</span>}
+                                    {toko.noHp && <span>HP: {toko.noHp}</span>}
+                                  </div>
+                                  {toko.alamat && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{toko.alamat}</p>}
+                                </div>
+                                <div className="flex items-center gap-1 ml-2">
+                                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setTokoDialog({open: true, mode: 'edit', data: toko})}>
+                                    <FilePlus2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteToko(toko.id)}>
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
 
-                      {/* Summary Card */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
-                          <CardContent className="pt-3 pb-2 px-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Database className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                              <p className="text-[10px] text-muted-foreground">Total No. Bukti</p>
+                    {/* Toko Dialog */}
+                    {tokoDialog.open && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                        <Card className="w-full max-w-md mx-4">
+                          <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-sm">{tokoDialog.mode === 'add' ? 'Tambah Toko' : 'Edit Toko'}</CardTitle>
+                              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setTokoDialog(prev => ({...prev, open: false}))}><X className="h-3.5 w-3.5" /></Button>
                             </div>
-                            <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{totalGroups}</p>
-                          </CardContent>
-                        </Card>
-                        <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
-                          <CardContent className="pt-3 pb-2 px-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Wallet className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                              <p className="text-[10px] text-muted-foreground">Total Pengeluaran</p>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground">Nama Toko *</label>
+                              <Input className="h-8 text-xs mt-1" value={tokoDialog.data.namaToko} onChange={e => setTokoDialog(prev => ({...prev, data: {...prev.data, namaToko: e.target.value}}))} placeholder="Nama toko/penyedia" />
                             </div>
-                            <p className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(totalPengeluaran)}</p>
-                          </CardContent>
-                        </Card>
-                        <Card className="border-teal-200 dark:border-teal-800 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
-                          <CardContent className="pt-3 pb-2 px-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <CheckCircle2 className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
-                              <p className="text-[10px] text-muted-foreground">Sudah Ada No Pesanan</p>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground">Direktur/Pengusaha</label>
+                              <Input className="h-8 text-xs mt-1" value={tokoDialog.data.direktur} onChange={e => setTokoDialog(prev => ({...prev, data: {...prev.data, direktur: e.target.value}}))} />
                             </div>
-                            <p className="text-sm font-bold text-teal-700 dark:text-teal-300">{assignedGroups}</p>
-                          </CardContent>
-                        </Card>
-                        <Card className="border-rose-200 dark:border-rose-800 bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30">
-                          <CardContent className="pt-3 pb-2 px-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <AlertCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
-                              <p className="text-[10px] text-muted-foreground">Belum Ada No Pesanan</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">No. HP</label>
+                                <Input className="h-8 text-xs mt-1" value={tokoDialog.data.noHp} onChange={e => setTokoDialog(prev => ({...prev, data: {...prev.data, noHp: e.target.value}}))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">Kategori</label>
+                                <Input className="h-8 text-xs mt-1" value={tokoDialog.data.kategori} onChange={e => setTokoDialog(prev => ({...prev, data: {...prev.data, kategori: e.target.value}}))} placeholder="Barang/Jasa" />
+                              </div>
                             </div>
-                            <p className="text-sm font-bold text-rose-700 dark:text-rose-300">{unassignedGroups}</p>
+                            <div>
+                              <label className="text-[11px] font-medium text-muted-foreground">Alamat</label>
+                              <textarea className="w-full mt-1 rounded-md border border-input bg-transparent px-3 py-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[60px]" value={tokoDialog.data.alamat} onChange={e => setTokoDialog(prev => ({...prev, data: {...prev.data, alamat: e.target.value}}))} />
+                            </div>
+                            <div className="flex justify-end gap-2 pt-2">
+                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setTokoDialog(prev => ({...prev, open: false}))}>Batal</Button>
+                              <Button size="sm" className="h-7 text-xs" onClick={() => saveToko(tokoDialog.data)} disabled={!tokoDialog.data.namaToko.trim()}>
+                                {tokoDialog.mode === 'add' ? 'Tambah' : 'Simpan'}
+                              </Button>
+                            </div>
                           </CardContent>
                         </Card>
                       </div>
+                    )}
+                  </div>
+                )}
 
-                      {/* Grouped Items */}
-                      {spendingTransactions.length === 0 ? (
-                        <Card className="border-dashed">
-                          <CardContent className="py-16 text-center space-y-3">
-                            <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mx-auto">
-                              <Database className="h-8 w-8 text-muted-foreground" />
+                {/* ===== DATA SEKOLAH SUB-TAB ===== */}
+                {spjSubTab === 'data-sekolah' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold">Data Sekolah</h3>
+                        <p className="text-[11px] text-muted-foreground">Informasi sekolah untuk keperluan dokumen SPJ</p>
+                      </div>
+                      <Button size="sm" className="h-7 text-[11px] gap-1" onClick={saveSekolah} disabled={sekolahSaving}>
+                        {sekolahSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                        Simpan
+                      </Button>
+                    </div>
+
+                    {sekolahLoading ? (
+                      <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}</div>
+                    ) : (
+                      <div className="grid gap-4">
+                        <Card>
+                          <CardHeader className="pb-2"><CardTitle className="text-xs">Identitas Sekolah</CardTitle></CardHeader>
+                          <CardContent className="space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">Nama Sekolah</label>
+                                <Input className="h-8 text-xs mt-1" value={sekolahData.namaSekolah || ''} onChange={e => setSekolahData(prev => ({...prev, namaSekolah: e.target.value}))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">NPSN</label>
+                                <Input className="h-8 text-xs mt-1" value={sekolahData.npsn || ''} onChange={e => setSekolahData(prev => ({...prev, npsn: e.target.value}))} />
+                              </div>
                             </div>
                             <div>
-                              <h3 className="text-sm font-semibold">Belum ada data pengeluaran</h3>
-                              <p className="text-xs text-muted-foreground mt-1">Import file BKU terlebih dahulu untuk melihat data Master Data</p>
+                              <label className="text-[11px] font-medium text-muted-foreground">Alamat</label>
+                              <Input className="h-8 text-xs mt-1" value={sekolahData.alamat || ''} onChange={e => setSekolahData(prev => ({...prev, alamat: e.target.value}))} />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">Kabupaten</label>
+                                <Input className="h-8 text-xs mt-1" value={sekolahData.kabupaten || ''} onChange={e => setSekolahData(prev => ({...prev, kabupaten: e.target.value}))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-muted-foreground">Provinsi</label>
+                                <Input className="h-8 text-xs mt-1" value={sekolahData.provinsi || ''} onChange={e => setSekolahData(prev => ({...prev, provinsi: e.target.value}))} />
+                              </div>
                             </div>
                           </CardContent>
                         </Card>
-                      ) : (
-                        <div className="space-y-3">
-                          {sortedGroupKeys.map(noBuktiKey => {
-                            const transactions = grouped.get(noBuktiKey)!
-                            const isTanpaBukti = noBuktiKey === '__TANPA_NO_BUKTI__'
-                            const displayKey = isTanpaBukti ? 'Tanpa No. Bukti' : noBuktiKey
-                            const groupTotal = transactions.reduce((s, t) => s + t.pengeluaran, 0)
-                            const isCollapsed = masterDataCollapsed[noBuktiKey] !== false // default expanded
-                            const hasPesanan = !isTanpaBukti && spjPesananMap[noBuktiKey]?.trim()
 
-                            return (
-                              <Card key={noBuktiKey} className={`overflow-hidden ${hasPesanan ? 'border-teal-200 dark:border-teal-800' : ''}`}>
-                                {/* Group Header - Clickable */}
-                                <div
-                                  className="px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors"
-                                  onClick={() => setMasterDataCollapsed(prev => ({ ...prev, [noBuktiKey]: prev[noBuktiKey] === false }))}
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                      {isCollapsed ? (
-                                        <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                                      ) : (
-                                        <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
-                                      )}
-                                      <div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-xs font-semibold">{displayKey}</span>
-                                          {hasPesanan && (
-                                            <Badge variant="default" className="text-[9px] h-4 px-1.5 bg-teal-600">
-                                              {spjPesananMap[noBuktiKey]}
-                                            </Badge>
-                                          )}
-                                          {!isTanpaBukti && !hasPesanan && (
-                                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-amber-600 border-amber-300">
-                                              Belum ada pesanan
-                                            </Badge>
-                                          )}
-                                        </div>
-                                        <div className="flex items-center gap-3 mt-0.5">
-                                          <span className="text-[10px] text-muted-foreground">
-                                            {transactions[0]?.tanggal ? new Date(transactions[0].tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
-                                          </span>
-                                          <span className="text-[10px] text-muted-foreground">{transactions.length} transaksi</span>
-                                        </div>
+                        <Card>
+                          <CardHeader className="pb-2"><CardTitle className="text-xs">Pejabat Sekolah</CardTitle></CardHeader>
+                          <CardContent className="space-y-3">
+                            {[
+                              {label: 'Kepala Sekolah', nameKey: 'kepalaSekolah', nipKey: 'nipKepala'},
+                              {label: 'Bendahara', nameKey: 'bendahara', nipKey: 'nipBendahara'},
+                              {label: 'Pengurus Barang', nameKey: 'pengurusBarang', nipKey: 'nipPengurus'},
+                              {label: 'Penerima Barang', nameKey: 'penerimaBarang', nipKey: 'nipPenerima'},
+                            ].map(field => (
+                              <div key={field.nameKey} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[11px] font-medium text-muted-foreground">{field.label}</label>
+                                  <Input className="h-8 text-xs mt-1" value={sekolahData[field.nameKey] || ''} onChange={e => setSekolahData(prev => ({...prev, [field.nameKey]: e.target.value}))} />
+                                </div>
+                                <div>
+                                  <label className="text-[11px] font-medium text-muted-foreground">NIP</label>
+                                  <Input className="h-8 text-xs mt-1" value={sekolahData[field.nipKey] || ''} onChange={e => setSekolahData(prev => ({...prev, [field.nipKey]: e.target.value}))} />
+                                </div>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ===== MASTER BPU SUB-TAB ===== */}
+                {spjSubTab === 'master-bpu' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold">Master BPU</h3>
+                        <p className="text-[11px] text-muted-foreground">Bukti Pengeluaran Uang — barang/jasa</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">{bpuList.length} BPU</Badge>
+                        <Button size="sm" className="h-7 text-[11px] gap-1" onClick={syncBPU} disabled={bpuSyncing}>
+                          {bpuSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Database className="h-3 w-3" />}
+                          Sinkron dari BKU
+                        </Button>
+                      </div>
+                    </div>
+
+                    {bpuLoading ? (
+                      <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-24 rounded-lg" />)}</div>
+                    ) : bpuList.length === 0 ? (
+                      <Card className="border-dashed">
+                        <CardContent className="py-12 text-center">
+                          <ClipboardList className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
+                          <h3 className="text-sm font-semibold">Belum ada data BPU</h3>
+                          <p className="text-xs text-muted-foreground mt-1">Klik &quot;Sinkron dari BKU&quot; untuk mengambil data BPU dari file BKU yang sudah diimpor</p>
+                        </CardContent>
+                      </Card>
+                    ) : (
+                      <div className="space-y-3">
+                        {bpuList.map((bpu: any) => {
+                          const isSelected = selectedBpu === bpu.id
+                          const totalJumlah = bpu.items?.reduce((s: number, i: any) => s + i.jumlah, 0) || 0
+                          const editFields = bpuEditFields[bpu.id] || { noPesanan: bpu.noPesanan, tglPesan: bpu.tglPesan, tokoId: bpu.tokoId || '' }
+
+                          return (
+                            <Card key={bpu.id} className={`overflow-hidden ${isSelected ? 'ring-2 ring-primary' : ''}`}>
+                              <div className="px-4 py-3 cursor-pointer hover:bg-muted/50" onClick={() => setSelectedBpu(isSelected ? null : bpu.id)}>
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold">{bpu.noBukti}</span>
+                                        {bpu.noPesanan && <Badge className="text-[9px] h-4 px-1.5 bg-teal-600">No. {bpu.noPesanan.padStart(3, '0')}</Badge>}
+                                        {!bpu.noPesanan && <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-amber-600 border-amber-300">Belum ada pesanan</Badge>}
+                                      </div>
+                                      <div className="flex items-center gap-3 mt-0.5 text-[10px] text-muted-foreground">
+                                        {bpu.tglPesan && <span>{new Date(bpu.tglPesan).toLocaleDateString('id-ID')}</span>}
+                                        <span>{bpu.items?.length || 0} item</span>
+                                        {bpu.toko && <span>Toko: {bpu.toko.namaToko}</span>}
                                       </div>
                                     </div>
-                                    <span className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(groupTotal)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-sm font-bold">{fmtRp(totalJumlah)}</span>
+                                    {isSelected ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {isSelected && (
+                                <CardContent className="px-4 pb-3 pt-0 space-y-3 border-t">
+                                  {/* Edit fields */}
+                                  <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">No Pesanan (3 digit)</label>
+                                      <Input className="h-7 text-[11px] mt-1" value={editFields.noPesanan} onChange={e => setBpuEditFields(prev => ({...prev, [bpu.id]: {...(prev[bpu.id] || {noPesanan: bpu.noPesanan, tglPesan: bpu.tglPesan, tokoId: bpu.tokoId || ''}), noPesanan: e.target.value}}))} placeholder="001" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">Tanggal Pesan</label>
+                                      <Input type="date" className="h-7 text-[11px] mt-1" value={editFields.tglPesan ? editFields.tglPesan.split('T')[0] : ''} onChange={e => setBpuEditFields(prev => ({...prev, [bpu.id]: {...(prev[bpu.id] || {noPesanan: bpu.noPesanan, tglPesan: bpu.tglPesan, tokoId: bpu.tokoId || ''}), tglPesan: e.target.value}}))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">Toko</label>
+                                      <select className="w-full h-7 text-[11px] mt-1 rounded-md border border-input bg-transparent px-2" value={editFields.tokoId} onChange={e => setBpuEditFields(prev => ({...prev, [bpu.id]: {...(prev[bpu.id] || {noPesanan: bpu.noPesanan, tglPesan: bpu.tglPesan, tokoId: bpu.tokoId || ''}), tokoId: e.target.value}}))}>
+                                        <option value="">-- Pilih Toko --</option>
+                                        {tokoList.map((t: any) => <option key={t.id} value={t.id}>{t.namaToko}</option>)}
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button size="sm" className="h-6 text-[10px] gap-1" onClick={() => { updateBPU(bpu.id, editFields); setBpuEditFields(prev => { const next = {...prev}; delete next[bpu.id]; return next }) }}>
+                                      <CheckCircle2 className="h-3 w-3" /> Simpan
+                                    </Button>
+                                    <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setBpuEditFields(prev => { const next = {...prev}; delete next[bpu.id]; return next })}>
+                                      Batal
+                                    </Button>
+                                    <div className="ml-auto">
+                                      <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 text-destructive" onClick={() => deleteBPU(bpu.id)}>
+                                        <Trash2 className="h-3 w-3" /> Hapus
+                                      </Button>
+                                    </div>
                                   </div>
 
-                                  {/* No Pesanan Input */}
-                                  {!isTanpaBukti && (
-                                    <div className="mt-2 flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                                      <label className="text-[10px] font-medium text-muted-foreground shrink-0">No Pesanan:</label>
-                                      <Input
-                                        className="h-6 text-[11px] max-w-[240px]"
-                                        value={spjPesananMap[noBuktiKey] || ''}
-                                        onChange={e => setSpjPesananMap(prev => ({ ...prev, [noBuktiKey]: e.target.value }))}
-                                        placeholder="contoh: 001/SP/SD/2024"
-                                      />
+                                  {/* Auto-generated nomor surat */}
+                                  {(bpu.nomorSuratPesanan || bpu.nomorSuratBAST || bpu.nomorSuratSHP) && (
+                                    <div className="bg-teal-50 dark:bg-teal-950/30 rounded-md p-2.5 space-y-1">
+                                      <p className="text-[10px] font-semibold text-teal-700 dark:text-teal-300">Nomor Surat (Auto-generated)</p>
+                                      {bpu.nomorSuratPesanan && <p className="text-[10px] text-teal-600 dark:text-teal-400">Pesanan: {bpu.nomorSuratPesanan}</p>}
+                                      {bpu.nomorSuratBAST && <p className="text-[10px] text-teal-600 dark:text-teal-400">BAST: {bpu.nomorSuratBAST}</p>}
+                                      {bpu.nomorSuratSHP && <p className="text-[10px] text-teal-600 dark:text-teal-400">SHP: {bpu.nomorSuratSHP}</p>}
                                     </div>
                                   )}
-                                </div>
 
-                                {/* Collapsible Items Table */}
-                                {!isCollapsed && (
-                                  <CardContent className="px-4 pb-3 pt-0">
-                                    <div className="overflow-x-auto">
-                                      <table className="w-full text-[11px]">
-                                        <thead>
-                                          <tr className="border-b bg-muted/50">
-                                            <th className="px-2 py-1.5 text-center w-10">No</th>
-                                            <th className="px-2 py-1.5 text-left w-28">Kode Rekening</th>
-                                            <th className="px-2 py-1.5 text-left">Uraian (BKU)</th>
-                                            <th className="px-2 py-1.5 text-left">Uraian (RKAS)</th>
-                                            <th className="px-2 py-1.5 text-right w-28">Jumlah</th>
+                                  {/* Items table */}
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-[11px]">
+                                      <thead>
+                                        <tr className="border-b bg-muted/50">
+                                          <th className="px-2 py-1.5 text-center w-10">No</th>
+                                          <th className="px-2 py-1.5 text-left">Uraian</th>
+                                          <th className="px-2 py-1.5 text-left w-28">Kode Rekening</th>
+                                          <th className="px-2 py-1.5 text-right w-24">Jumlah</th>
+                                          <th className="px-2 py-1.5 text-right w-28">Harga Toko 2</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {bpu.items?.map((item: any, idx: number) => (
+                                          <tr key={item.id || idx} className="border-b last:border-0 hover:bg-muted/30">
+                                            <td className="px-2 py-1.5 text-center text-muted-foreground">{idx + 1}</td>
+                                            <td className="px-2 py-1.5">{item.uraian || '-'}</td>
+                                            <td className="px-2 py-1.5 font-mono text-[10px]">{item.kodeRekening || '-'}</td>
+                                            <td className="px-2 py-1.5 text-right font-medium">{fmtRp(item.jumlah)}</td>
+                                            <td className="px-2 py-1.5 text-right">
+                                              <Input className="h-6 text-[10px] text-right w-24 ml-auto" value={item.hargaToko2 || ''} onBlur={e => {
+                                                const newItems = bpu.items.map((i: any, fi: number) => fi === idx ? {...i, hargaToko2: parseFloat(e.target.value) || 0} : i)
+                                                updateBPItemHargaToko2(bpu.id, newItems)
+                                              }} onChange={e => {
+                                                const newItems = bpu.items.map((i: any, fi: number) => fi === idx ? {...i, hargaToko2: parseFloat(e.target.value) || 0} : i)
+                                                setBpuList(prev => prev.map((b: any) => b.id === bpu.id ? {...b, items: newItems} : b))
+                                              }} placeholder="0" />
+                                            </td>
                                           </tr>
-                                        </thead>
-                                        <tbody>
-                                          {transactions.map((t, idx) => {
-                                            const ck = compositeKey(t.kodeKegiatan, t.kodeRekening)
-                                            const rkasUraian = rkasLookup.get(ck) || '-'
-                                            return (
-                                              <tr key={idx} className="border-b last:border-0 hover:bg-muted/30">
-                                                <td className="px-2 py-1.5 text-center text-muted-foreground">{idx + 1}</td>
-                                                <td className="px-2 py-1.5 font-mono text-[10px]">{t.kodeRekening || '-'}</td>
-                                                <td className="px-2 py-1.5">{t.uraian || '-'}</td>
-                                                <td className="px-2 py-1.5 text-muted-foreground">{rkasUraian}</td>
-                                                <td className="px-2 py-1.5 text-right font-medium">{fmtRp(t.pengeluaran)}</td>
-                                              </tr>
-                                            )
-                                          })}
-                                          <tr className="bg-muted/50 font-semibold">
-                                            <td colSpan={4} className="px-2 py-1.5 text-right">Total</td>
-                                            <td className="px-2 py-1.5 text-right">{fmtRp(groupTotal)}</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
+                                        ))}
+                                        <tr className="bg-muted/50 font-semibold">
+                                          <td colSpan={3} className="px-2 py-1.5 text-right">Total</td>
+                                          <td className="px-2 py-1.5 text-right">{fmtRp(totalJumlah)}</td>
+                                          <td></td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </CardContent>
+                              )}
+                            </Card>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ===== MASTER BNU SUB-TAB ===== */}
+                {spjSubTab === 'master-bnu' && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold">Master BNU</h3>
+                        <p className="text-[11px] text-muted-foreground">Belanja Honor/Gaji</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">{bnuList.length} BNU</Badge>
+                        <Button size="sm" className="h-7 text-[11px] gap-1" onClick={syncBNU} disabled={bnuSyncing}>
+                          {bnuSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Database className="h-3 w-3" />}
+                          Sinkron dari BKU
+                        </Button>
+                      </div>
+                    </div>
+
+                    {bnuLoading ? (
+                      <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-24 rounded-lg" />)}</div>
+                    ) : bnuList.length === 0 ? (
+                      <Card className="border-dashed">
+                        <CardContent className="py-12 text-center">
+                          <Users className="h-10 w-10 text-muted-foreground mx-auto mb-2" />
+                          <h3 className="text-sm font-semibold">Belum ada data BNU</h3>
+                          <p className="text-xs text-muted-foreground mt-1">Klik &quot;Sinkron dari BKU&quot; untuk mengambil data BNU dari file BKU yang sudah diimpor</p>
+                        </CardContent>
+                      </Card>
+                    ) : (
+                      <div className="space-y-3">
+                        {bnuList.map((bnu: any) => {
+                          const isSelected = selectedBnu === bnu.id
+                          const totalJumlah = bnu.items?.reduce((s: number, i: any) => s + i.jumlah, 0) || 0
+                          const editFields = bnuEditFields[bnu.id] || { noPesanan: bnu.noPesanan, tglPesan: bnu.tglPesan, tokoId: bnu.tokoId || '' }
+
+                          return (
+                            <Card key={bnu.id} className={`overflow-hidden ${isSelected ? 'ring-2 ring-primary' : ''}`}>
+                              <div className="px-4 py-3 cursor-pointer hover:bg-muted/50" onClick={() => setSelectedBnu(isSelected ? null : bnu.id)}>
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-3">
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-semibold">{bnu.noBukti}</span>
+                                        {bnu.noPesanan && <Badge className="text-[9px] h-4 px-1.5 bg-teal-600">No. {bnu.noPesanan.padStart(3, '0')}</Badge>}
+                                        {!bnu.noPesanan && <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-amber-600 border-amber-300">Belum ada pesanan</Badge>}
+                                      </div>
+                                      <div className="flex items-center gap-3 mt-0.5 text-[10px] text-muted-foreground">
+                                        {bnu.tglPesan && <span>{new Date(bnu.tglPesan).toLocaleDateString('id-ID')}</span>}
+                                        <span>{bnu.items?.length || 0} item</span>
+                                        {bnu.toko && <span>Toko: {bnu.toko.namaToko}</span>}
+                                      </div>
                                     </div>
-                                  </CardContent>
-                                )}
-                              </Card>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </>
-                  )
-                })()}
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-sm font-bold">{fmtRp(totalJumlah)}</span>
+                                    {isSelected ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {isSelected && (
+                                <CardContent className="px-4 pb-3 pt-0 space-y-3 border-t">
+                                  <div className="pt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">No Pesanan (3 digit)</label>
+                                      <Input className="h-7 text-[11px] mt-1" value={editFields.noPesanan} onChange={e => setBnuEditFields(prev => ({...prev, [bnu.id]: {...(prev[bnu.id] || {noPesanan: bnu.noPesanan, tglPesan: bnu.tglPesan, tokoId: bnu.tokoId || ''}), noPesanan: e.target.value}}))} placeholder="001" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">Tanggal Pesan</label>
+                                      <Input type="date" className="h-7 text-[11px] mt-1" value={editFields.tglPesan ? editFields.tglPesan.split('T')[0] : ''} onChange={e => setBnuEditFields(prev => ({...prev, [bnu.id]: {...(prev[bnu.id] || {noPesanan: bnu.noPesanan, tglPesan: bnu.tglPesan, tokoId: bnu.tokoId || ''}), tglPesan: e.target.value}}))} />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-medium text-muted-foreground">Toko</label>
+                                      <select className="w-full h-7 text-[11px] mt-1 rounded-md border border-input bg-transparent px-2" value={editFields.tokoId} onChange={e => setBnuEditFields(prev => ({...prev, [bnu.id]: {...(prev[bnu.id] || {noPesanan: bnu.noPesanan, tglPesan: bnu.tglPesan, tokoId: bnu.tokoId || ''}), tokoId: e.target.value}}))}>
+                                        <option value="">-- Pilih Toko --</option>
+                                        {tokoList.map((t: any) => <option key={t.id} value={t.id}>{t.namaToko}</option>)}
+                                      </select>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button size="sm" className="h-6 text-[10px] gap-1" onClick={() => { updateBNU(bnu.id, editFields); setBnuEditFields(prev => { const next = {...prev}; delete next[bnu.id]; return next }) }}>
+                                      <CheckCircle2 className="h-3 w-3" /> Simpan
+                                    </Button>
+                                    <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={() => setBnuEditFields(prev => { const next = {...prev}; delete next[bnu.id]; return next })}>
+                                      Batal
+                                    </Button>
+                                    <div className="ml-auto">
+                                      <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1 text-destructive" onClick={() => deleteBNU(bnu.id)}>
+                                        <Trash2 className="h-3 w-3" /> Hapus
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  {(bnu.nomorSuratPesanan || bnu.nomorSuratBAST || bnu.nomorSuratSHP) && (
+                                    <div className="bg-teal-50 dark:bg-teal-950/30 rounded-md p-2.5 space-y-1">
+                                      <p className="text-[10px] font-semibold text-teal-700 dark:text-teal-300">Nomor Surat (Auto-generated)</p>
+                                      {bnu.nomorSuratPesanan && <p className="text-[10px] text-teal-600 dark:text-teal-400">Pesanan: {bnu.nomorSuratPesanan}</p>}
+                                      {bnu.nomorSuratBAST && <p className="text-[10px] text-teal-600 dark:text-teal-400">BAST: {bnu.nomorSuratBAST}</p>}
+                                      {bnu.nomorSuratSHP && <p className="text-[10px] text-teal-600 dark:text-teal-400">SHP: {bnu.nomorSuratSHP}</p>}
+                                    </div>
+                                  )}
+
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-[11px]">
+                                      <thead>
+                                        <tr className="border-b bg-muted/50">
+                                          <th className="px-2 py-1.5 text-center w-10">No</th>
+                                          <th className="px-2 py-1.5 text-left">Uraian</th>
+                                          <th className="px-2 py-1.5 text-left w-28">Kode Rekening</th>
+                                          <th className="px-2 py-1.5 text-right w-24">Jumlah</th>
+                                          <th className="px-2 py-1.5 text-right w-28">Harga Toko 2</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {bnu.items?.map((item: any, idx: number) => (
+                                          <tr key={item.id || idx} className="border-b last:border-0 hover:bg-muted/30">
+                                            <td className="px-2 py-1.5 text-center text-muted-foreground">{idx + 1}</td>
+                                            <td className="px-2 py-1.5">{item.uraian || '-'}</td>
+                                            <td className="px-2 py-1.5 font-mono text-[10px]">{item.kodeRekening || '-'}</td>
+                                            <td className="px-2 py-1.5 text-right font-medium">{fmtRp(item.jumlah)}</td>
+                                            <td className="px-2 py-1.5 text-right">
+                                              <Input className="h-6 text-[10px] text-right w-24 ml-auto" value={item.hargaToko2 || ''} onBlur={e => {
+                                                const newItems = bnu.items.map((i: any, fi: number) => fi === idx ? {...i, hargaToko2: parseFloat(e.target.value) || 0} : i)
+                                                updateBNUItemHargaToko2(bnu.id, newItems)
+                                              }} onChange={e => {
+                                                const newItems = bnu.items.map((i: any, fi: number) => fi === idx ? {...i, hargaToko2: parseFloat(e.target.value) || 0} : i)
+                                                setBnuList(prev => prev.map((b: any) => b.id === bnu.id ? {...b, items: newItems} : b))
+                                              }} placeholder="0" />
+                                            </td>
+                                          </tr>
+                                        ))}
+                                        <tr className="bg-muted/50 font-semibold">
+                                          <td colSpan={3} className="px-2 py-1.5 text-right">Total</td>
+                                          <td className="px-2 py-1.5 text-right">{fmtRp(totalJumlah)}</td>
+                                          <td></td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </CardContent>
+                              )}
+                            </Card>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* ===== REKAPITULASI SUB-TAB ===== */}
                 {spjSubTab === 'rekapitulasi' && (
@@ -2016,7 +2419,7 @@ export default function Home() {
                 )}
 
                 {/* ===== GENERATED DOCUMENT SUB-TABS ===== */}
-                {spjSubTab !== 'rekapitulasi' && spjSubTab !== 'master-data' && (() => {
+                {!['rekapitulasi', 'master-data', 'master-toko', 'data-sekolah', 'master-bpu', 'master-bnu'].includes(spjSubTab) && (() => {
                   const docType = spjSubTab as SPJDocType
                   const src = selectedSpjMonth === -1 ? spjData?.tahunan : spjData?.bulanan?.[selectedSpjMonth]
 

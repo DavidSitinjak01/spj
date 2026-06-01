@@ -13,20 +13,99 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+model Toko {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  namaToko  String
+  direktur  String   @default("")
+  noHp      String   @default("")
+  alamat    String   @default("")
+  kategori  String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  bpus BPU[]
+  bnus BNU[]
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model DataSekolah {
+  id              String   @id @default(cuid())
+  namaSekolah     String   @default("")
+  npsn            String   @default("")
+  alamat          String   @default("")
+  kabupaten       String   @default("")
+  provinsi        String   @default("")
+  kepalaSekolah   String   @default("")
+  nipKepala       String   @default("")
+  bendahara       String   @default("")
+  nipBendahara    String   @default("")
+  pengurusBarang  String   @default("")
+  nipPengurus     String   @default("")
+  penerimaBarang  String   @default("")
+  nipPenerima     String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model BPU {
+  id               String   @id @default(cuid())
+  noBukti          String   @unique  // e.g., "BPU01", "BPU02"
+  noPesanan        String   @default("")  // 3-digit manual input, e.g., "001"
+  tglPesan         String   @default("")  // ISO date string
+  tokoId           String?  
+  toko             Toko?    @relation(fields: [tokoId], references: [id], onDelete: SetNull)
+  bkuFileName      String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Auto-generated nomor surat (computed from formula)
+  // Pesanan: "421.3/" + NoPesanan + "-P/DB/SMANSATLD/" + RomanMonth(TglPesan) + "/" + Year(TglPesan)
+  // BAST:    "421.3/" + NoPesanan + "-BAST/SMANSA-TD/" + RomanMonth(TglPesan) + "/" + Year(TglPesan)
+  // SHP:     "421.3/" + NoPesanan + "-PB/SMANSA-TD/" + RomanMonth(TglPesan) + "/" + Year(TglPesan)
+
+  // Items with harga toko 2 for comparison
+  items BPItem[]
+}
+
+model BPItem {
+  id            String   @id @default(cuid())
+  bpuId         String
+  bpu           BPU      @relation(fields: [bpuId], references: [id], onDelete: Cascade)
+  uraian        String   @default("")       // Item description from BKU
+  kodeRekening  String   @default("")       // Kode Rekening
+  jumlah        Float    @default(0)        // Amount from BKU
+  hargaToko2    Float    @default(0)        // Comparison price (manual input)
+  volume        String   @default("")       // Volume
+  satuan        String   @default("")       // Satuan
+  tarifHarga    Float    @default(0)        // Unit price
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model BNU {
+  id               String   @id @default(cuid())
+  noBukti          String   @unique  // e.g., "BNU01", "BNU02"
+  noPesanan        String   @default("")  // 3-digit manual input
+  tglPesan         String   @default("")  // ISO date string
+  tokoId           String?
+  toko             Toko?    @relation(fields: [tokoId], references: [id], onDelete: SetNull)
+  bkuFileName      String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items BNUItem[]
+}
+
+model BNUItem {
+  id            String   @id @default(cuid())
+  bnuId         String
+  bnu           BNU      @relation(fields: [bnuId], references: [id], onDelete: Cascade)
+  uraian        String   @default("")
+  kodeRekening  String   @default("")
+  jumlah        Float    @default(0)
+  hargaToko2    Float    @default(0)
+  volume        String   @default("")
+  satuan        String   @default("")
+  tarifHarga    Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
