@@ -3466,7 +3466,7 @@ export default function Home() {
                                             <th colSpan={6} className="border border-black px-2 py-1 text-center font-bold text-[11pt]">RINCIAN PEKERJAAN</th>
                                           </tr>
                                           <tr>
-                                            <th className="border border-black px-2 py-1 text-center w-8">No</th>
+                                            <th className="border border-black px-1 py-1 text-center w-6">No</th>
                                             <th className="border border-black px-2 py-1 text-left">Uraian Barang / Jasa</th>
                                             <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
                                             <th className="border border-black px-2 py-1 text-center w-20">Satuan Ukuran</th>
@@ -3477,7 +3477,7 @@ export default function Home() {
                                         <tbody>
                                           {items.map((item: any, idx: number) => (
                                             <tr key={idx}>
-                                              <td className="border border-black px-2 py-0.5 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-1 py-0.5 text-center">{idx + 1}</td>
                                               <td className="border border-black px-2 py-0.5">{item.uraian || '-'}</td>
                                               <td className="border border-black px-2 py-0.5 text-center">{item.volume || '1'}</td>
                                               <td className="border border-black px-2 py-0.5 text-center">{item.satuan || 'Paket'}</td>
