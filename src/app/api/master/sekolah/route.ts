@@ -125,7 +125,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const initFromBKU = searchParams.get('initFromBKU') === 'true';
 
-    // Fetch the first (and only) DataSekolah record
+    // Fetch the first (and only) DataSekolah record (include logo URLs since they're needed for KOP display)
     const record = await db.dataSekolah.findFirst();
 
     if (record) {
@@ -186,21 +186,35 @@ export async function POST(request: Request) {
     if (typeof body.garisBawahStyle === 'string') fields.garisBawahStyle = body.garisBawahStyle;
     if (typeof body.garisBawahJarak === 'number') fields.garisBawahJarak = body.garisBawahJarak;
 
-    // Find the existing record (should be at most one)
-    const existing = await db.dataSekolah.findFirst();
+    // Find the existing record (should be at most one) — exclude large logo base64 from the lookup
+    const existing = await db.dataSekolah.findFirst({
+      select: { id: true },
+    });
 
     let record;
+
+    // Fields to select in response (exclude large base64 logo data)
+    const selectFields = {
+      id: true, namaSekolah: true, npsn: true, alamat: true, kabupaten: true, provinsi: true,
+      kepalaSekolah: true, nipKepala: true, bendahara: true, nipBendahara: true,
+      pengurusBarang: true, nipPengurus: true, penerimaBarang: true, nipPenerima: true,
+      logoKiriLebar: true, logoKiriTinggi: true, logoKananLebar: true, logoKananTinggi: true,
+      garisBawahStyle: true, garisBawahJarak: true,
+      createdAt: true, updatedAt: true,
+    };
 
     if (existing) {
       // Update the existing record
       record = await db.dataSekolah.update({
         where: { id: existing.id },
         data: fields,
+        select: selectFields,
       });
     } else {
       // Create a new record
       record = await db.dataSekolah.create({
         data: fields,
+        select: selectFields,
       });
     }
 
