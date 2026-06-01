@@ -3545,6 +3545,71 @@ export default function Home() {
                                           {sekolahData.nipKepala && <p>NIP. {sekolahData.nipKepala}</p>}
                                         </div>
                                       </div>
+
+                                      {/* TANDA PEMBAYARAN (Kuitansi) */}
+                                      <div className="mt-6 border-t border-black pt-3">
+                                        <table className="w-full text-[10pt] mb-2">
+                                          <tbody>
+                                            <tr>
+                                              <td className="py-0.5">Sumber Anggaran : Dana BOSP {tahunAnggaran}</td>
+                                              <td className="py-0.5">Program : 06.05</td>
+                                            </tr>
+                                            <tr>
+                                              <td className="py-0.5">Kas/Pos Tanggal : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
+                                              <td className="py-0.5">Kegiatan : 06.05.08.</td>
+                                            </tr>
+                                            <tr>
+                                              <td className="py-0.5">Nomor : {selectedRecord?.noBukti || '............'}</td>
+                                              <td className="py-0.5">Kode Rek : 5.1.02.01.01.0024</td>
+                                            </tr>
+                                          </tbody>
+                                        </table>
+
+                                        <p className="font-bold text-center text-[11pt] mb-2">TANDA PEMBAYARAN</p>
+
+                                        <div className="text-[10pt]" style={{ lineHeight: '1.5' }}>
+                                          <p>Sudah terima dari : Bendahara {sekolahData.namaSekolah || '........................'}</p>
+                                          <p>Uang sebesar : Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</p>
+                                          <p>Terbilang : {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</p>
+                                          <p>Nomor Surat persetujuan penyediaan barang dan jasa : {selectedRecord?.nomorSuratPesanan || '............'}</p>
+                                          <p>Untuk pembayaran : Pengadaan Alat Tulis Kantor (ATK)</p>
+                                        </div>
+
+                                        <div className="flex justify-between mt-4 text-[10pt]">
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Mengetahui :</p>
+                                            <p>Pengurus Barang</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                            <p>Penata Muda</p>
+                                            {sekolahData.nipPengurus && <p>NIP. {sekolahData.nipPengurus}</p>}
+                                          </div>
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Lunas Bayar Oleh :</p>
+                                            <p>Bendahara {sekolahData.namaSekolah || '........................'}</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{sekolahData.bendahara || '........................'}</p>
+                                            <p>Penata TK. I</p>
+                                            {sekolahData.nipBendahara && <p>NIP. {sekolahData.nipBendahara}</p>}
+                                          </div>
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Diterima oleh :</p>
+                                            <p>{toko?.namaToko || '........................'}</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{toko?.direktur || '........................'}</p>
+                                            <p>Direktur</p>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-center mt-4 text-[10pt]">
+                                          <p className="font-bold">Menyetujui :</p>
+                                          <p>Kepala Sekolah {sekolahData.namaSekolah || '........................'}</p>
+                                          <div className="h-16" />
+                                          <p className="font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          <p>Pembina Tk I</p>
+                                          {sekolahData.nipKepala && <p>NIP. {sekolahData.nipKepala}</p>}
+                                        </div>
+                                      </div>
                                     </div>
                                   )}
 
