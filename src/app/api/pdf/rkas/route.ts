@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
-import { processPDF, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
+import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -632,15 +632,20 @@ print(json.dumps(result, ensure_ascii=False))
 `;
 
 // --- Parse single RKAS file ---
-async function parseRKASFile(fileName: string): Promise<RKASMonth | null> {
+async function parseRKASFile(fileName: string, buffer?: Buffer): Promise<RKASMonth | null> {
   if (isServerless()) {
-    // Serverless: download from blob + parse with pdf-parse + regex
-    const blobInfo = await getBlobInfo(fileName);
-    if (!blobInfo) return null;
-
+    // Serverless: parse with pdfjs-dist + regex
+    // If buffer is provided (e.g., right after upload), use it directly
+    // Otherwise, download from blob
     try {
-      // processPDF handles downloading from blob internally on serverless
-      const info = await processPDF(fileName);
+      let info;
+      if (buffer) {
+        info = await processPDFBuffer(fileName, buffer);
+      } else {
+        const blobInfo = await getBlobInfo(fileName);
+        if (!blobInfo) return null;
+        info = await processPDF(fileName);
+      }
       const fullText = info.extractedText.map(p => p.text).join('\n');
       return parseRKASFromText(fullText, fileName);
     } catch (err) {
@@ -897,9 +902,9 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes);
 
     if (isServerless()) {
-      // Serverless: upload to blob + parse
+      // Serverless: upload to blob + parse directly from buffer
       await uploadToBlob(file.name, buffer);
-      const data = await parseRKASFile(file.name);
+      const data = await parseRKASFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
 
       // Deduplicate: delete other blob files with same key

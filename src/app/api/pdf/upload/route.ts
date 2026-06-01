@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
-import { processPDF, renderPDFPages, uploadToBlob } from '@/lib/pdf-processor';
+import { processPDF, processPDFBuffer, renderPDFPages, uploadToBlob } from '@/lib/pdf-processor';
 import { isServerless } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
@@ -23,9 +23,9 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes);
 
     if (isServerless()) {
-      // Serverless: upload to Vercel Blob + process with pdf-parse
+      // Serverless: upload to Vercel Blob + process directly from buffer
       await uploadToBlob(file.name, buffer);
-      const info = await processPDF(file.name);
+      const info = await processPDFBuffer(file.name, buffer);
       const pageImages = await renderPDFPages(file.name);
 
       return NextResponse.json({

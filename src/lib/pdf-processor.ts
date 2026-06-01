@@ -249,21 +249,28 @@ export async function getPDFFiles(): Promise<string[]> {
   }
 }
 
+/**
+ * Process a PDF directly from a buffer (no need to download from Blob).
+ * Use this after upload to avoid race conditions with Blob indexing.
+ */
+export async function processPDFBuffer(fileName: string, buffer: Buffer, filePath?: string): Promise<PDFInfo> {
+  const parsed = await extractTextWithPdfParse(buffer);
+
+  return {
+    fileName,
+    filePath: filePath || fileName,
+    pageCount: parsed.numpages,
+    extractedText: parsed.perPageText,
+  };
+}
+
 export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
     // Serverless: download from private blob using get() + pdfjs-dist
     // Use pathname-based download which handles private store authentication automatically
     const pathname = `${BLOB_PREFIX}${fileName}`;
     const buffer = await downloadFromBlobByPathname(pathname);
-    const parsed = await extractTextWithPdfParse(buffer);
-
-    // pdfjs-dist gives us per-page text directly
-    return {
-      fileName,
-      filePath: pathname,
-      pageCount: parsed.numpages,
-      extractedText: parsed.perPageText,
-    };
+    return processPDFBuffer(fileName, buffer, pathname);
   }
 
   // Local: keep existing Python approach

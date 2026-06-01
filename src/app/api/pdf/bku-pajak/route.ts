@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
-import { processPDF, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
+import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -464,14 +464,19 @@ print(json.dumps(result, ensure_ascii=False))
 `;
 
 // --- Parse single BKU Pajak file (dual-mode) ---
-async function parseBKUPajakFile(fileName: string): Promise<BKUPajakMonth | null> {
+async function parseBKUPajakFile(fileName: string, buffer?: Buffer): Promise<BKUPajakMonth | null> {
   if (isServerless()) {
-    // Serverless: download from blob + parse with pdf-parse + regex
-    const blobInfo = await getBlobInfo(fileName);
-    if (!blobInfo) return null;
-
+    // Serverless: parse with pdfjs-dist + regex
+    // If buffer is provided (e.g., right after upload), use it directly
     try {
-      const info = await processPDF(fileName);
+      let info;
+      if (buffer) {
+        info = await processPDFBuffer(fileName, buffer);
+      } else {
+        const blobInfo = await getBlobInfo(fileName);
+        if (!blobInfo) return null;
+        info = await processPDF(fileName);
+      }
       const fullText = info.extractedText.map(p => p.text).join('\n');
       return parseBKUPajakFromText(fullText, fileName);
     } catch (err) {
@@ -766,9 +771,9 @@ export async function POST(request: Request) {
     const buffer = Buffer.from(bytes);
 
     if (isServerless()) {
-      // Serverless: upload to blob + parse
+      // Serverless: upload to blob + parse directly from buffer
       await uploadToBlob(file.name, buffer);
-      const data = await parseBKUPajakFile(file.name);
+      const data = await parseBKUPajakFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
       // Deduplicate: delete other blob BKU Pajak files with the same bulan+tahun
