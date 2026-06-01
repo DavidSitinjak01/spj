@@ -3562,29 +3562,87 @@ export default function Home() {
                                         <table className="w-full text-[10pt] mb-2">
                                           <tbody>
                                             <tr>
-                                              <td className="py-0.5">Sumber Anggaran : Dana BOSP {tahunAnggaran}</td>
-                                              <td className="py-0.5">Program : 06.05</td>
+                                              <td className="py-0.5" style={{ width: '50%' }}>
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Sumber Anggaran</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>Dana BOSP {tahunAnggaran}</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
+                                              <td className="py-0.5" style={{ width: '50%' }}>
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Program</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
                                             </tr>
                                             <tr>
-                                              <td className="py-0.5">Kas/Pos Tanggal : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
-                                              <td className="py-0.5">Kegiatan : 06.05.08.</td>
+                                              <td className="py-0.5">
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
+                                              <td className="py-0.5">
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kegiatan</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05.08.</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
                                             </tr>
                                             <tr>
-                                              <td className="py-0.5">Nomor : {selectedRecord?.noBukti || '............'}</td>
-                                              <td className="py-0.5">Kode Rek : 5.1.02.01.01.0024</td>
+                                              <td className="py-0.5">
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Nomor</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{selectedRecord?.noBukti || '............'}</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
+                                              <td className="py-0.5">
+                                                <table className="w-full text-[10pt]">
+                                                  <tbody>
+                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kode Rek</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>5.1.02.01.01.0024</td></tr>
+                                                  </tbody>
+                                                </table>
+                                              </td>
                                             </tr>
                                           </tbody>
                                         </table>
 
                                         <p className="font-bold text-center text-[11pt] mb-2">TANDA PEMBAYARAN</p>
 
-                                        <div className="text-[10pt]" style={{ lineHeight: '1.5' }}>
-                                          <p>Sudah terima dari : Bendahara {sekolahData.namaSekolah || '........................'}</p>
-                                          <p>Uang sebesar : Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</p>
-                                          <p>Terbilang : {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</p>
-                                          <p>Nomor Surat persetujuan penyediaan barang dan jasa : {selectedRecord?.nomorSuratPesanan || '............'}</p>
-                                          <p>Untuk pembayaran : Pengadaan Alat Tulis Kantor (ATK)</p>
-                                        </div>
+                                        <table className="w-full text-[10pt]" style={{ lineHeight: '1.5' }}>
+                                          <tbody>
+                                            <tr>
+                                              <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Sudah terima dari</td>
+                                              <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                              <td>Bendahara {sekolahData.namaSekolah || '........................'}</td>
+                                            </tr>
+                                            <tr>
+                                              <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Uang sebesar</td>
+                                              <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                              <td>Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</td>
+                                            </tr>
+                                            <tr>
+                                              <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Terbilang</td>
+                                              <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                              <td className="italic">{totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</td>
+                                            </tr>
+                                            <tr>
+                                              <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Nomor Surat persetujuan penyediaan barang dan jasa</td>
+                                              <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                              <td>{selectedRecord?.nomorSuratPesanan || '............'}</td>
+                                            </tr>
+                                            <tr>
+                                              <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Untuk pembayaran</td>
+                                              <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                              <td>Pengadaan Alat Tulis Kantor (ATK)</td>
+                                            </tr>
+                                          </tbody>
+                                        </table>
 
                                         <div className="flex justify-between mt-4 text-[10pt]">
                                           <div className="text-center w-1/3">
@@ -3937,48 +3995,87 @@ export default function Home() {
                                       <table className="w-full text-[10pt] mb-2" style={{ lineHeight: '1.4' }}>
                                         <tbody>
                                           <tr>
-                                            <td className="py-0.5">Sumber Anggaran : Dana BOSP {tahunAnggaran}</td>
-                                            <td className="py-0.5">Program : 06.05</td>
+                                            <td className="py-0.5" style={{ width: '50%' }}>
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Sumber Anggaran</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>Dana BOSP {tahunAnggaran}</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
+                                            <td className="py-0.5" style={{ width: '50%' }}>
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Program</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
                                           </tr>
                                           <tr>
-                                            <td className="py-0.5">Kas/Pos Tanggal : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
-                                            <td className="py-0.5">Kegiatan : 06.05.08.</td>
+                                            <td className="py-0.5">
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
+                                            <td className="py-0.5">
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kegiatan</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05.08.</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
                                           </tr>
                                           <tr>
-                                            <td className="py-0.5">Nomor : {selectedRecord?.noBukti || '............'}</td>
-                                            <td className="py-0.5">Kode Rek : 5.1.02.01.01.0024</td>
+                                            <td className="py-0.5">
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Nomor</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{selectedRecord?.noBukti || '............'}</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
+                                            <td className="py-0.5">
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kode Rek</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>5.1.02.01.01.0024</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
                                           </tr>
                                         </tbody>
                                       </table>
 
                                       <p className="font-bold text-center text-[12pt] mb-2">TANDA PEMBAYARAN</p>
 
-                                      <div className="text-[10pt]" style={{ lineHeight: '1.6' }}>
-                                        <table className="w-full">
-                                          <tbody>
-                                            <tr>
-                                              <td className="py-0.5" style={{ width: '40%', verticalAlign: 'top' }}>Sudah terima dari :</td>
-                                              <td className="py-0.5">Bendahara {sekolahData.namaSekolah || '........................'}</td>
-                                            </tr>
-                                            <tr>
-                                              <td className="py-0.5" style={{ verticalAlign: 'top' }}>Uang sebesar :</td>
-                                              <td className="py-0.5">Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</td>
-                                            </tr>
-                                            <tr>
-                                              <td className="py-0.5" style={{ verticalAlign: 'top' }}>Terbilang :</td>
-                                              <td className="py-0.5 italic">{totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</td>
-                                            </tr>
-                                            <tr>
-                                              <td className="py-0.5" style={{ verticalAlign: 'top' }}>Nomor Surat persetujuan penyediaan barang dan jasa :</td>
-                                              <td className="py-0.5">{selectedRecord?.nomorSuratPesanan || '............'}</td>
-                                            </tr>
-                                            <tr>
-                                              <td className="py-0.5" style={{ verticalAlign: 'top' }}>Untuk pembayaran :</td>
-                                              <td className="py-0.5">Pengadaan Alat Tulis Kantor (ATK)</td>
-                                            </tr>
-                                          </tbody>
-                                        </table>
-                                      </div>
+                                      <table className="w-full text-[10pt]" style={{ lineHeight: '1.6' }}>
+                                        <tbody>
+                                          <tr>
+                                            <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Sudah terima dari</td>
+                                            <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                            <td>Bendahara {sekolahData.namaSekolah || '........................'}</td>
+                                          </tr>
+                                          <tr>
+                                            <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Uang sebesar</td>
+                                            <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                            <td>Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</td>
+                                          </tr>
+                                          <tr>
+                                            <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Terbilang</td>
+                                            <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                            <td className="italic">{totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</td>
+                                          </tr>
+                                          <tr>
+                                            <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Nomor Surat persetujuan penyediaan barang dan jasa</td>
+                                            <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                            <td>{selectedRecord?.nomorSuratPesanan || '............'}</td>
+                                          </tr>
+                                          <tr>
+                                            <td style={{ whiteSpace: 'nowrap', verticalAlign: 'top' }}>Untuk pembayaran</td>
+                                            <td style={{ verticalAlign: 'top' }}>&nbsp;:&nbsp;</td>
+                                            <td>Pengadaan Alat Tulis Kantor (ATK)</td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
 
                                       <div className="mt-6 text-[10pt]">
                                         <div className="flex justify-between">
