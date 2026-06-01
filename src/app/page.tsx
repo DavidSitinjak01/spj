@@ -4019,7 +4019,7 @@ export default function Home() {
               </div>
 
               {/* Print Area - Hidden, used for printing */}
-              <div id="print-area" className="hidden" />
+              <div id="print-area" className="print-area-screen" />
             </TabsContent>
 
             {/* === BKU TAB === */}
