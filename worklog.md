@@ -81,3 +81,38 @@ Stage Summary:
 - Monthly grouping with clear visual separation
 - Transaction details with Penerimaan (green) and Pengeluaran (red)
 - All lint checks pass, all APIs tested successfully
+
+---
+Task ID: 2
+Agent: RKAS API Agent
+Task: Create RKAS Import API with Monthly Grouping
+
+Work Log:
+- Analyzed existing BKU route pattern at /api/pdf/bku/route.ts for reference
+- Examined both RKAS PDF types: monthly (1 rapbs-bulan-output.pdf) and annual (rapbs-all-output.pdf)
+- Built /api/pdf/rkas endpoint at src/app/api/pdf/rkas/route.ts with three handlers:
+  - GET: List all RKAS files (excluding BKU files), parse each PDF, return monthly grouped data sorted by month order
+  - POST: Accept file upload via FormData, save to upload dir, parse and return data
+  - DELETE: Delete file and associated cache by fileName
+- Implemented Python-based PDF parsing via pdfplumber (execSync pattern matching BKU route):
+  - Extracts header info: bulan, tahun, npsn, namaSekolah, alamat, kabupaten, provinsi, sumberDana
+  - Handles both monthly format (8-10 cols with Volume/Satuan/Tarif Harga) and annual format (15 cols with Sumber Dana allocation)
+  - Variable column count handling for kodeProgram (split across 2-3 columns)
+  - Skips footer lines containing "Halaman" and "Kertas Kerja" to avoid polluting header fields
+  - Correctly extracts "Sumber Dana BOSP Reguler" (without colon) from monthly format
+- Parsed penerimaan (income) table rows with kode, nama, jumlah
+- Parsed belanja (expenditure) items with noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah
+- Implemented intermediate row filtering: detects and removes rekening header/subtotal rows that would cause double-counting
+  - Identifies intermediate rows: same kodeRekening+kodeProgram as next item, uraian doesn't start with number prefix, next item does
+- Grouped items by standar category (02=Standar Isi through 08=Standar Penilaian)
+- Calculated totals per category and overall
+- Implemented file-based caching in .pdf-cache/ directory with modification time checking
+- Monthly sorting by Indonesian month order (JANUARI=1 through DESEMBER=12)
+- Error handling: try/catch wrapping, graceful per-file failure, proper HTTP error responses
+
+Test Results:
+- Monthly RKAS (1 rapbs-bulan-output.pdf): JANUARI 2026, BOSP Reguler, 115 items, 7 standar categories, total belanja 181,663,000
+- Annual RKAS (rapbs-all-output.pdf): 220 items, 7 standar categories, total belanja 1,461,460,000 (matches total penerimaan)
+- Caching: First parse ~9.2s, cached response ~18ms
+- Lint: All checks pass
+- DELETE endpoint handles nonexistent files gracefully

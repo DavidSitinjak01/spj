@@ -255,6 +255,26 @@ export async function POST(request: Request) {
   }
 }
 
+// DELETE: Remove a BKU file and its cache
+export async function DELETE(request: Request) {
+  try {
+    const body = await request.json();
+    const { fileName } = body;
+    if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
+
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    const cachePath = getCacheKey(fileName);
+
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('BKU delete error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
 function writeFile(filePath: string, buffer: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
     fs.writeFile(filePath, buffer, (err) => err ? reject(err) : resolve());

@@ -17,7 +17,7 @@ import {
   PieChart, BarChart3, Users, ShoppingBag, Landmark, Calendar, Building2,
   Search, TrendingUp, Wallet, GraduationCap, Wrench, Monitor, FileSpreadsheet,
   ChevronDown, ArrowUpRight, ArrowDownRight, Info,
-  Receipt, FilePlus2, ArrowRight, Minus, Plus, FolderOpen, Trash2,
+  Receipt, FilePlus2, ArrowRight, Minus, Plus, FolderOpen, Trash2, ClipboardList,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -39,6 +39,21 @@ interface BKUMonth {
   namaSekolah: string; npsn: string; transactions: BKUTransaction[];
   totalPenerimaan: number; totalPengeluaran: number; saldoAkhir: number;
   saldoAkhirBank: number; saldoAkhirTunai: number; tanggalTutup: string;
+}
+
+interface RKASItem {
+  noUrut: string; kodeRekening: string; kodeProgram: string; uraian: string;
+  volume: string; satuan: string; tarifHarga: number; jumlah: number;
+}
+interface RKASStandar {
+  kode: string; nama: string; items: RKASItem[]; total: number;
+}
+interface RKASPenerimaanItem { kode: string; nama: string; jumlah: number }
+interface RKASMonth {
+  fileName: string; bulan: string; tahun: string; sumberDana: string;
+  namaSekolah: string; npsn: string; alamat: string; kabupaten: string; provinsi: string;
+  totalPenerimaan: number; totalBelanja: number;
+  penerimaan: RKASPenerimaanItem[]; standarList: RKASStandar[]; allItems: RKASItem[];
 }
 
 interface BudgetData {
@@ -68,6 +83,12 @@ const STANDAR_ICONS: Record<string, any> = {
   '08': FileSpreadsheet,
 }
 
+const MONTH_NAMES: Record<string, string> = {
+  'JANUARI': 'Jan', 'FEBRUARI': 'Feb', 'MARET': 'Mar', 'APRIL': 'Apr',
+  'MEI': 'Mei', 'JUNI': 'Jun', 'JULI': 'Jul', 'AGUSTUS': 'Agu',
+  'SEPTEMBER': 'Sep', 'OKTOBER': 'Okt', 'NOVEMBER': 'Nov', 'DESEMBER': 'Des',
+}
+
 // --- Component ---
 export default function Home() {
   const [pdfData, setPdfData] = useState<PDFData | null>(null)
@@ -93,11 +114,18 @@ export default function Home() {
   const [bkuUploading, setBkuUploading] = useState(false)
   const [selectedBkuMonth, setSelectedBkuMonth] = useState<number>(0)
   const [bkuSearchTerm, setBkuSearchTerm] = useState('')
+  const [rkasMonths, setRkasMonths] = useState<RKASMonth[]>([])
+  const [rkasLoading, setRkasLoading] = useState(false)
+  const [rkasUploading, setRkasUploading] = useState(false)
+  const [selectedRkasMonth, setSelectedRkasMonth] = useState<number>(0)
+  const [rkasSearchTerm, setRkasSearchTerm] = useState('')
+  const [selectedRkasStandar, setSelectedRkasStandar] = useState<string>('all')
   const bkuFileInputRef = useRef<HTMLInputElement>(null)
+  const rkasFileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadPDF('rapbs-all-output.pdf'); loadBKU() }, [])
+  useEffect(() => { loadPDF('rapbs-all-output.pdf'); loadBKU(); loadRKAS() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
@@ -182,6 +210,44 @@ export default function Home() {
     } catch {} finally { setBkuUploading(false); if (bkuFileInputRef.current) bkuFileInputRef.current.value = '' }
   }
 
+  const loadRKAS = async () => {
+    setRkasLoading(true)
+    try {
+      const res = await fetch('/api/pdf/rkas')
+      if (res.ok) { const data = await res.json(); setRkasMonths(data.months || []) }
+    } catch {} finally { setRkasLoading(false) }
+  }
+
+  const handleRKASUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files; if (!files || files.length === 0) return
+    setRkasUploading(true)
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const formData = new FormData(); formData.append('file', files[i])
+        const res = await fetch('/api/pdf/rkas', { method: 'POST', body: formData })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          setError(err.error || 'Gagal mengimpor file RKAS')
+        }
+      }
+      await loadRKAS()
+    } catch {} finally { setRkasUploading(false); if (rkasFileInputRef.current) rkasFileInputRef.current.value = '' }
+  }
+
+  const deleteRKASFile = async (fileName: string) => {
+    try {
+      await fetch('/api/pdf/rkas', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName }) })
+      await loadRKAS()
+    } catch {}
+  }
+
+  const deleteBKUFile = async (fileName: string) => {
+    try {
+      await fetch('/api/pdf/bku', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName }) })
+      await loadBKU()
+    } catch {}
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }
   const goToPage = (page: number) => { if (pdfData && page >= 1 && page <= pdfData.pageCount) setCurrentPage(page) }
   const handlePageInput = (value: string) => { setPageInputValue(value); const page = parseInt(value); if (!isNaN(page) && page >= 1 && page <= (pdfData?.pageCount || 1)) setCurrentPage(page) }
@@ -209,6 +275,28 @@ export default function Home() {
   const filteredPegawai = budgetData?.pegawai.filter(p =>
     !searchTerm || p.nama.toLowerCase().includes(searchTerm.toLowerCase())
   ) || []
+
+  // --- RKAS aggregated data for charts ---
+  const rkasPieData = rkasMonths.length > 0
+    ? (() => {
+        const standarTotals: Record<string, number> = {}
+        const standarNames: Record<string, string> = {}
+        for (const m of rkasMonths) {
+          for (const s of m.standarList) {
+            standarTotals[s.kode] = (standarTotals[s.kode] || 0) + s.total
+            standarNames[s.kode] = s.nama
+          }
+        }
+        const total = Object.values(standarTotals).reduce((a, b) => a + b, 0)
+        return Object.entries(standarTotals).map(([kode, jumlah]) => ({
+          name: standarNames[kode], value: jumlah, persen: total > 0 ? Math.round(jumlah / total * 100) : 0
+        }))
+      })()
+    : []
+
+  const rkasBarData = rkasMonths.length > 0
+    ? rkasMonths.map(m => ({ name: (MONTH_NAMES[m.bulan] || m.bulan.slice(0, 3)) + ' ' + m.tahun, Penerimaan: m.totalPenerimaan, Belanja: m.totalBelanja }))
+    : []
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -268,9 +356,7 @@ export default function Home() {
             <div className="px-4 pt-2 border-b overflow-x-auto">
               <TabsList className="h-8">
                 <TabsTrigger value="dashboard" className="text-xs gap-1 px-2.5"><PieChart className="h-3 w-3" />Dashboard</TabsTrigger>
-                <TabsTrigger value="alokasi" className="text-xs gap-1 px-2.5"><BarChart3 className="h-3 w-3" />Alokasi</TabsTrigger>
-                <TabsTrigger value="pengadaan" className="text-xs gap-1 px-2.5"><ShoppingBag className="h-3 w-3" />Pengadaan</TabsTrigger>
-                <TabsTrigger value="pegawai" className="text-xs gap-1 px-2.5"><Users className="h-3 w-3" />Pegawai</TabsTrigger>
+                <TabsTrigger value="rkas" className="text-xs gap-1 px-2.5"><ClipboardList className="h-3 w-3" />RKAS</TabsTrigger>
                 <TabsTrigger value="bku" className="text-xs gap-1 px-2.5"><Receipt className="h-3 w-3" />BKU</TabsTrigger>
                 <TabsTrigger value="viewer" className="text-xs gap-1 px-2.5"><FileText className="h-3 w-3" />Dokumen</TabsTrigger>
                 <TabsTrigger value="summary" className="text-xs gap-1 px-2.5"><Sparkles className="h-3 w-3" />Ringkasan</TabsTrigger>
@@ -319,7 +405,6 @@ export default function Home() {
 
                     {/* Charts Row */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {/* Pie Chart - Alokasi per Standar */}
                       <Card>
                         <CardHeader className="pb-2"><CardTitle className="text-sm">Alokasi per Standar Nasional Pendidikan</CardTitle></CardHeader>
                         <CardContent>
@@ -334,8 +419,6 @@ export default function Home() {
                           </ResponsiveContainer>
                         </CardContent>
                       </Card>
-
-                      {/* Bar Chart - Top Spending */}
                       <Card>
                         <CardHeader className="pb-2"><CardTitle className="text-sm">Top 8 Belanja Terbesar</CardTitle></CardHeader>
                         <CardContent>
@@ -383,148 +466,239 @@ export default function Home() {
               </div>
             </TabsContent>
 
-            {/* === ALOKASI TAB === */}
-            <TabsContent value="alokasi" className="flex-1 m-0 min-h-0 overflow-auto">
-              <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
-                {budgetLoading ? (
-                  <div className="space-y-3">{[1,2,3,4].map(i => <Skeleton key={i} className="h-20 rounded-lg" />)}</div>
-                ) : budgetData ? (
-                  <>
-                    {/* Belanja Operasi vs Modal */}
-                    <Card>
-                      <CardHeader className="pb-2"><CardTitle className="text-sm">Perbandingan Belanja Operasi vs Modal</CardTitle></CardHeader>
-                      <CardContent>
-                        <ResponsiveContainer width="100%" height={250}>
-                          <RechartsPie>
-                            <Pie data={belanjaTypeData} cx="50%" cy="50%" outerRadius={90} innerRadius={55} dataKey="value" nameKey="name" label={({ name, percent }) => `${name} ${(percent*100).toFixed(1)}%`}>
-                              <Cell fill="#f59e0b" /><Cell fill="#3b82f6" />
-                            </Pie>
-                            <Tooltip formatter={(v: number) => fmtRp(v)} />
-                          </RechartsPie>
-                        </ResponsiveContainer>
-                      </CardContent>
-                    </Card>
+            {/* === RKAS TAB === */}
+            <TabsContent value="rkas" className="flex-1 m-0 min-h-0 overflow-auto">
+              <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
+                {/* Upload area */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input type="file" ref={rkasFileInputRef} onChange={handleRKASUpload} accept=".pdf" multiple className="hidden" />
+                  <Button variant="outline" size="sm" onClick={() => rkasFileInputRef.current?.click()} disabled={rkasUploading} className="gap-2">
+                    {rkasUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FilePlus2 className="h-3.5 w-3.5" />}
+                    {rkasUploading ? 'Mengimpor...' : 'Import RKAS'}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">{rkasMonths.length} bulan RKAS terimpor</span>
+                  {rkasLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                </div>
 
-                    {/* Sumber Dana Detail */}
-                    <Card>
-                      <CardHeader className="pb-2"><CardTitle className="text-sm">Detail Sumber Dana</CardTitle></CardHeader>
-                      <CardContent>
-                        <div className="space-y-2">
-                          {budgetData.penerimaan.sumber.map((s, i) => (
-                            <div key={i} className="flex items-center justify-between p-2 rounded-md bg-muted/50 text-sm">
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline" className="text-[10px] font-mono">{s.kode}</Badge>
-                                <span>{s.nama}</span>
-                              </div>
-                              <span className="font-semibold">{fmtRp(s.jumlah)}</span>
-                            </div>
-                          ))}
-                          <Separator />
-                          <div className="flex items-center justify-between p-2 text-sm font-bold">
-                            <span>Total Penerimaan</span>
-                            <span className="text-emerald-600 dark:text-emerald-400">{fmtRp(budgetData.penerimaan.total)}</span>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    {/* Belanja Terbesar */}
-                    <Card>
-                      <CardHeader className="pb-2"><CardTitle className="text-sm">Pos Belanja Terbesar</CardTitle></CardHeader>
-                      <CardContent>
-                        <div className="space-y-2">
-                          {budgetData.belanjaTerbesar.map((b, i) => (
-                            <div key={i} className="flex items-center gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors">
-                              <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 text-xs font-bold text-primary">{i + 1}</div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium truncate">{b.nama}</p>
-                                <Badge variant="secondary" className="text-[10px]">{b.kategori}</Badge>
-                              </div>
-                              <span className="text-sm font-semibold shrink-0">{fmtRp(b.jumlah)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </>
-                ) : <div className="text-center py-12 text-muted-foreground text-sm">Data belum tersedia</div>}
-              </div>
-            </TabsContent>
-
-            {/* === PENGADAAN TAB === */}
-            <TabsContent value="pengadaan" className="flex-1 m-0 min-h-0 overflow-auto">
-              <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
-                {budgetData ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="Cari barang pengadaan..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 h-9 text-sm" />
+                {rkasMonths.length === 0 ? (
+                  <Card className="border-dashed">
+                    <CardContent className="py-12 text-center space-y-3">
+                      <div className="h-14 w-14 rounded-2xl bg-muted flex items-center justify-center mx-auto">
+                        <ClipboardList className="h-7 w-7 text-muted-foreground" />
                       </div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">{filteredPengadaan.length} item pengadaan ditemukan</div>
-                    <div className="space-y-2">
-                      {filteredPengadaan.map((p, i) => (
-                        <div key={i} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                          <div className="h-8 w-8 rounded-md bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
-                            <ShoppingBag className="h-4 w-4 text-blue-500" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate">{p.nama}</p>
-                            <Badge variant="outline" className="text-[10px] mt-0.5">{p.kategori}</Badge>
-                          </div>
-                          <span className="text-sm font-semibold shrink-0">{fmtRp(p.jumlah)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : budgetLoading ? <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-14 rounded-lg" />)}</div> : <div className="text-center py-12 text-muted-foreground text-sm">Data belum tersedia</div>}
-              </div>
-            </TabsContent>
-
-            {/* === PEGAWAI TAB === */}
-            <TabsContent value="pegawai" className="flex-1 m-0 min-h-0 overflow-auto">
-              <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
-                {budgetData ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="Cari nama pegawai..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 h-9 text-sm" />
+                      <div>
+                        <h3 className="text-sm font-semibold">Belum ada data RKAS</h3>
+                        <p className="text-xs text-muted-foreground mt-1">Import file PDF RKAS per bulan untuk melihat rincian anggaran bulanan</p>
                       </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Button variant="outline" size="sm" onClick={() => rkasFileInputRef.current?.click()} className="gap-2">
+                        <Upload className="h-3.5 w-3.5" /> Import File RKAS
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <>
+                    {/* Summary Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Total Penerimaan</p>
+                          <p className="text-base font-bold text-emerald-700 dark:text-emerald-300">{fmtRp(rkasMonths.reduce((s, m) => s + m.totalPenerimaan, 0))}</p>
+                        </CardContent>
+                      </Card>
                       <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
-                        <CardContent className="pt-4 pb-3">
-                          <p className="text-[11px] text-muted-foreground">Total Honor Pendidik</p>
-                          <p className="text-lg font-bold text-amber-700 dark:text-amber-300">{fmtRp(budgetData.pegawai.filter(p => p.jenis === 'pendidik').reduce((s, p) => s + p.honor, 0))}</p>
-                          <p className="text-[11px] text-muted-foreground">{budgetData.pegawai.filter(p => p.jenis === 'pendidik').length} orang</p>
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Total Belanja</p>
+                          <p className="text-base font-bold text-amber-700 dark:text-amber-300">{fmtRp(rkasMonths.reduce((s, m) => s + m.totalBelanja, 0))}</p>
                         </CardContent>
                       </Card>
-                      <Card className="border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30">
-                        <CardContent className="pt-4 pb-3">
-                          <p className="text-[11px] text-muted-foreground">Total Honor Tenaga Kependidikan</p>
-                          <p className="text-lg font-bold text-blue-700 dark:text-blue-300">{fmtRp(budgetData.pegawai.filter(p => p.jenis !== 'pendidik').reduce((s, p) => s + p.honor, 0))}</p>
-                          <p className="text-[11px] text-muted-foreground">{budgetData.pegawai.filter(p => p.jenis !== 'pendidik').length} orang</p>
+                      <Card>
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Bulan Tercatat</p>
+                          <p className="text-base font-bold">{rkasMonths.length} bulan</p>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Standar SNP</p>
+                          <p className="text-base font-bold">{new Set(rkasMonths.flatMap(m => m.standarList.map(s => s.kode))).size} kategori</p>
                         </CardContent>
                       </Card>
                     </div>
-                    <div className="space-y-2">
-                      {filteredPegawai.map((p, i) => (
-                        <div key={i} className="flex items-center gap-3 p-3 rounded-lg border hover:bg-muted/30 transition-colors">
-                          <div className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 ${p.jenis === 'pendidik' ? 'bg-amber-100 dark:bg-amber-900' : 'bg-blue-100 dark:bg-blue-900'}`}>
-                            <Users className={`h-4 w-4 ${p.jenis === 'pendidik' ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium">{p.nama}</p>
-                            <Badge variant="outline" className="text-[10px] mt-0.5">{p.jenis === 'pendidik' ? 'Pendidik' : 'Tenaga Kependidikan'}</Badge>
-                          </div>
-                          <span className="text-sm font-semibold shrink-0">{fmtRp(p.honor)}</span>
-                        </div>
-                      ))}
+
+                    {/* Monthly Comparison Bar Chart */}
+                    {rkasMonths.length > 1 && (
+                      <Card>
+                        <CardHeader className="pb-2"><CardTitle className="text-sm">Perbandingan Penerimaan vs Belanja per Bulan</CardTitle></CardHeader>
+                        <CardContent>
+                          <ResponsiveContainer width="100%" height={250}>
+                            <BarChart data={rkasBarData}>
+                              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                              <XAxis fontSize={10} />
+                              <YAxis tickFormatter={(v: number) => `${(v/1000000).toFixed(0)}jt`} fontSize={10} />
+                              <Tooltip formatter={(v: number) => fmtRp(v)} />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                              <Bar dataKey="Penerimaan" fill="#10b981" radius={[4, 4, 0, 0]} />
+                              <Bar dataKey="Belanja" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Aggregated Standar Pie Chart */}
+                    {rkasPieData.length > 0 && (
+                      <Card>
+                        <CardHeader className="pb-2"><CardTitle className="text-sm">Distribusi Anggaran per Standar SNP (Semua Bulan)</CardTitle></CardHeader>
+                        <CardContent>
+                          <ResponsiveContainer width="100%" height={280}>
+                            <RechartsPie>
+                              <Pie data={rkasPieData} cx="50%" cy="50%" outerRadius={90} innerRadius={50} dataKey="value" nameKey="name" label={({ persen }) => `${persen}%`}>
+                                {rkasPieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                              </Pie>
+                              <Tooltip formatter={(v: number) => fmtRp(v)} />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                            </RechartsPie>
+                          </ResponsiveContainer>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Monthly Detail Sections */}
+                    <div className="space-y-4">
+                      {rkasMonths.map((month, mIdx) => {
+                        const isOpen = selectedRkasMonth === mIdx
+                        const filteredItems = selectedRkasStandar === 'all'
+                          ? month.allItems
+                          : month.standarList.find(s => s.kode === selectedRkasStandar)?.items || []
+                        const searchFiltered = filteredItems.filter(item =>
+                          !rkasSearchTerm || item.uraian.toLowerCase().includes(rkasSearchTerm.toLowerCase()) || item.kodeRekening.includes(rkasSearchTerm)
+                        )
+                        return (
+                          <Card key={mIdx} className="overflow-hidden">
+                            {/* Month Header - clickable */}
+                            <button
+                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors"
+                              onClick={() => { setSelectedRkasMonth(isOpen ? -1 : mIdx); setSelectedRkasStandar('all'); setRkasSearchTerm('') }}
+                            >
+                              <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0">
+                                <ClipboardList className="h-4 w-4 text-white" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold">{month.bulan ? (month.bulan.charAt(0) + month.bulan.slice(1).toLowerCase()) : 'Tahunan'} {month.tahun}</span>
+                                  <Badge variant="outline" className="text-[10px]">{month.sumberDana}</Badge>
+                                </div>
+                                <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
+                                  <span className="text-emerald-600 dark:text-emerald-400">+{fmtRp(month.totalPenerimaan)}</span>
+                                  <span className="text-amber-600 dark:text-amber-400">-{fmtRp(month.totalBelanja)}</span>
+                                  <span>{month.standarList.length} standar</span>
+                                </div>
+                              </div>
+                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => { e.stopPropagation(); deleteRKASFile(month.fileName) }} title="Hapus file">
+                                <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                              </Button>
+                              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {/* Expanded Detail */}
+                            {isOpen && (
+                              <div className="border-t">
+                                {/* Sub-header */}
+                                <div className="px-4 py-2 bg-muted/30 flex items-center gap-4 text-[11px] text-muted-foreground flex-wrap">
+                                  <span className="flex items-center gap-1"><Building2 className="h-3 w-3" />{month.namaSekolah}</span>
+                                  <span>NPSN: {month.npsn}</span>
+                                  {month.kabupaten && <span>{month.kabupaten}</span>}
+                                </div>
+
+                                {/* Standar Summary */}
+                                <div className="px-4 py-3">
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                                    {month.standarList.map((s, si) => {
+                                      const IconComp = STANDAR_ICONS[s.kode] || FileText
+                                      const isActive = selectedRkasStandar === s.kode
+                                      return (
+                                        <button key={si} onClick={() => setSelectedRkasStandar(isActive ? 'all' : s.kode)}
+                                          className={`p-2 rounded-lg border text-left transition-colors ${isActive ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/50'}`}>
+                                          <div className="flex items-center gap-1.5 mb-1">
+                                            <IconComp className="h-3 w-3 shrink-0" style={{ color: CHART_COLORS[si % CHART_COLORS.length] }} />
+                                            <span className="text-[10px] font-medium truncate">Std {s.kode}</span>
+                                          </div>
+                                          <p className="text-xs font-bold">{fmtRp(s.total)}</p>
+                                          <p className="text-[10px] text-muted-foreground">{s.items.length} item</p>
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+
+                                {/* Search & Filter */}
+                                <div className="px-4 pb-3 flex items-center gap-2">
+                                  <div className="relative flex-1">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                    <Input placeholder="Cari uraian atau kode rekening..." value={rkasSearchTerm} onChange={e => setRkasSearchTerm(e.target.value)} className="pl-9 h-8 text-xs" />
+                                  </div>
+                                  {selectedRkasStandar !== 'all' && (
+                                    <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => setSelectedRkasStandar('all')}>
+                                      <X className="h-3 w-3" />Reset Filter
+                                    </Button>
+                                  )}
+                                </div>
+
+                                {/* Items Table */}
+                                <div className="px-4 pb-3 overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="border-b">
+                                        <th className="text-left py-2 px-1.5 font-medium text-muted-foreground w-8">No</th>
+                                        <th className="text-left py-2 px-1.5 font-medium text-muted-foreground">Kode Rekening</th>
+                                        <th className="text-left py-2 px-1.5 font-medium text-muted-foreground">Uraian</th>
+                                        <th className="text-right py-2 px-1.5 font-medium text-muted-foreground">Vol</th>
+                                        <th className="text-left py-2 px-1.5 font-medium text-muted-foreground">Satuan</th>
+                                        <th className="text-right py-2 px-1.5 font-medium text-muted-foreground whitespace-nowrap">Tarif</th>
+                                        <th className="text-right py-2 px-1.5 font-medium text-muted-foreground whitespace-nowrap">Jumlah</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {searchFiltered.slice(0, 100).map((item, tIdx) => (
+                                        <tr key={tIdx} className="border-b hover:bg-muted/20 transition-colors">
+                                          <td className="py-1.5 px-1.5 font-mono text-muted-foreground">{item.noUrut}</td>
+                                          <td className="py-1.5 px-1.5 font-mono text-muted-foreground whitespace-nowrap">{item.kodeRekening}</td>
+                                          <td className="py-1.5 px-1.5 max-w-[300px]">
+                                            <span className="text-xs">{item.uraian}</span>
+                                          </td>
+                                          <td className="py-1.5 px-1.5 text-right">{item.volume || '-'}</td>
+                                          <td className="py-1.5 px-1.5">{item.satuan || '-'}</td>
+                                          <td className="py-1.5 px-1.5 text-right whitespace-nowrap">{item.tarifHarga > 0 ? fmtRp(item.tarifHarga) : '-'}</td>
+                                          <td className="py-1.5 px-1.5 text-right whitespace-nowrap font-medium">{fmtRp(item.jumlah)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr className="border-t-2 font-semibold">
+                                        <td colSpan={6} className="py-2 px-1.5">
+                                          {selectedRkasStandar === 'all' ? 'Total Belanja' : `Total Std ${selectedRkasStandar}`}
+                                        </td>
+                                        <td className="py-2 px-1.5 text-right whitespace-nowrap text-amber-600 dark:text-amber-400">
+                                          {fmtRp(selectedRkasStandar === 'all'
+                                            ? month.totalBelanja
+                                            : month.standarList.find(s => s.kode === selectedRkasStandar)?.total || 0
+                                          )}
+                                        </td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                  {searchFiltered.length > 100 && (
+                                    <p className="text-[10px] text-muted-foreground mt-2 text-center">Menampilkan 100 dari {searchFiltered.length} item. Gunakan pencarian untuk memfilter.</p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </Card>
+                        )
+                      })}
                     </div>
                   </>
-                ) : budgetLoading ? <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-14 rounded-lg" />)}</div> : <div className="text-center py-12 text-muted-foreground text-sm">Data belum tersedia</div>}
+                )}
               </div>
             </TabsContent>
 
@@ -635,6 +809,9 @@ export default function Home() {
                                   <span>Saldo: {fmtRp(month.saldoAkhir)}</span>
                                 </div>
                               </div>
+                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={(e) => { e.stopPropagation(); deleteBKUFile(month.fileName) }} title="Hapus file">
+                                <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+                              </Button>
                               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                             </button>
 
