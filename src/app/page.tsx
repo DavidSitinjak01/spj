@@ -3561,53 +3561,32 @@ export default function Home() {
                                       <div className="mt-6 border-t border-black pt-3" style={{ breakBefore: 'page' }}>
                                         <table className="w-full text-[10pt] mb-2">
                                           <tbody>
-                                            <tr>
-                                              <td className="py-0.5" style={{ width: '50%' }}>
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Sumber Anggaran</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>Dana BOSP {tahunAnggaran}</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
-                                              <td className="py-0.5" style={{ width: '50%' }}>
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Program</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
+                                            <tr className="py-0.5">
+                                              <td style={{ whiteSpace: 'nowrap' }}>Sumber Anggaran</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>Dana BOSP {tahunAnggaran}</td>
+                                              <td style={{ width: '8%' }} />
+                                              <td style={{ whiteSpace: 'nowrap' }}>Program</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>06.05</td>
                                             </tr>
-                                            <tr>
-                                              <td className="py-0.5">
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
-                                              <td className="py-0.5">
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kegiatan</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05.08.</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
+                                            <tr className="py-0.5">
+                                              <td style={{ whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
+                                              <td />
+                                              <td style={{ whiteSpace: 'nowrap' }}>Kegiatan</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>06.05.08.</td>
                                             </tr>
-                                            <tr>
-                                              <td className="py-0.5">
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Nomor</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{selectedRecord?.noBukti || '............'}</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
-                                              <td className="py-0.5">
-                                                <table className="w-full text-[10pt]">
-                                                  <tbody>
-                                                    <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kode Rek</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>5.1.02.01.01.0024</td></tr>
-                                                  </tbody>
-                                                </table>
-                                              </td>
+                                            <tr className="py-0.5">
+                                              <td style={{ whiteSpace: 'nowrap' }}>Nomor</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>{selectedRecord?.noBukti || '............'}</td>
+                                              <td />
+                                              <td style={{ whiteSpace: 'nowrap' }}>Kode Rek</td>
+                                              <td>&nbsp;:&nbsp;</td>
+                                              <td>5.1.02.01.01.0024</td>
                                             </tr>
                                           </tbody>
                                         </table>
@@ -3994,53 +3973,32 @@ export default function Home() {
                                       {/* Info Header 2 Kolom */}
                                       <table className="w-full text-[10pt] mb-2" style={{ lineHeight: '1.4' }}>
                                         <tbody>
-                                          <tr>
-                                            <td className="py-0.5" style={{ width: '50%' }}>
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Sumber Anggaran</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>Dana BOSP {tahunAnggaran}</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
-                                            <td className="py-0.5" style={{ width: '50%' }}>
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Program</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
+                                          <tr className="py-0.5">
+                                            <td style={{ whiteSpace: 'nowrap' }}>Sumber Anggaran</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>Dana BOSP {tahunAnggaran}</td>
+                                            <td style={{ width: '8%' }} />
+                                            <td style={{ whiteSpace: 'nowrap' }}>Program</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>06.05</td>
                                           </tr>
-                                          <tr>
-                                            <td className="py-0.5">
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
-                                            <td className="py-0.5">
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kegiatan</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>06.05.08.</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
+                                          <tr className="py-0.5">
+                                            <td style={{ whiteSpace: 'nowrap' }}>Kas/Pos Tanggal</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>{tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
+                                            <td />
+                                            <td style={{ whiteSpace: 'nowrap' }}>Kegiatan</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>06.05.08.</td>
                                           </tr>
-                                          <tr>
-                                            <td className="py-0.5">
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Nomor</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>{selectedRecord?.noBukti || '............'}</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
-                                            <td className="py-0.5">
-                                              <table className="w-full text-[10pt]">
-                                                <tbody>
-                                                  <tr><td style={{ width: '1px', whiteSpace: 'nowrap' }}>Kode Rek</td><td style={{ width: '1px' }}>&nbsp;:&nbsp;</td><td>5.1.02.01.01.0024</td></tr>
-                                                </tbody>
-                                              </table>
-                                            </td>
+                                          <tr className="py-0.5">
+                                            <td style={{ whiteSpace: 'nowrap' }}>Nomor</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>{selectedRecord?.noBukti || '............'}</td>
+                                            <td />
+                                            <td style={{ whiteSpace: 'nowrap' }}>Kode Rek</td>
+                                            <td>&nbsp;:&nbsp;</td>
+                                            <td>5.1.02.01.01.0024</td>
                                           </tr>
                                         </tbody>
                                       </table>
