@@ -51,3 +51,27 @@ Stage Summary:
 - Debounced API updates prevent excessive server requests
 - API endpoints: GET/POST/PUT/DELETE/PATCH /api/master/sekolah/kop-row
 - Document KOP rendering uses dynamic rows when available, falls back to static fields
+
+---
+Task ID: 3
+Agent: main
+Task: Add line height (jarak antar baris) control to KOP rows with increment/decrement buttons
+
+Work Log:
+- Added `lineHeight` Float field to KopRow Prisma model (default 1.3, range 0.5-3.0)
+- Pushed schema change to SQLite database
+- Updated kop-row API POST handler to include lineHeight in creation
+- Updated kop-row API PUT handler to accept lineHeight updates
+- Added lineHeight to KopRowData interface
+- Added lineHeight to addKopRow default values (1.3)
+- Added "Jarak:" control in KOP row editor with ↓/↑ increment/decrement buttons (step 0.1)
+- NOT a slider — uses button controls as user requested
+- Range: 0.5 (very tight) to 3.0 (very loose), default 1.3
+- Updated KOP preview rendering to use row.lineHeight
+- Updated kopSurat document print rendering to use row.lineHeight
+
+Stage Summary:
+- Line height control added per-row with ↓/↑ buttons (not slider)
+- Each KOP row can have its own line height (0.5 - 3.0, step 0.1)
+- Default lineHeight = 1.3 for new rows
+- Both preview and document print rendering respect lineHeight

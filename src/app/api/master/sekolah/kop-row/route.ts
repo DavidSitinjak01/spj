@@ -51,6 +51,7 @@ export async function POST(request: Request) {
         teks: typeof body.teks === 'string' ? body.teks : '',
         fontFamily: typeof body.fontFamily === 'string' ? body.fontFamily : 'Times New Roman',
         fontSize: typeof body.fontSize === 'number' ? body.fontSize : 12,
+        lineHeight: typeof body.lineHeight === 'number' ? body.lineHeight : 1.3,
         bold: typeof body.bold === 'boolean' ? body.bold : false,
         italic: typeof body.italic === 'boolean' ? body.italic : false,
         uppercase: typeof body.uppercase === 'boolean' ? body.uppercase : false,
@@ -81,6 +82,7 @@ export async function PUT(request: Request) {
     if (typeof updates.teks === 'string') fields.teks = updates.teks;
     if (typeof updates.fontFamily === 'string') fields.fontFamily = updates.fontFamily;
     if (typeof updates.fontSize === 'number') fields.fontSize = updates.fontSize;
+    if (typeof updates.lineHeight === 'number') fields.lineHeight = updates.lineHeight;
     if (typeof updates.bold === 'boolean') fields.bold = updates.bold;
     if (typeof updates.italic === 'boolean') fields.italic = updates.italic;
     if (typeof updates.uppercase === 'boolean') fields.uppercase = updates.uppercase;

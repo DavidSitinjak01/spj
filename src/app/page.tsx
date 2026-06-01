@@ -89,6 +89,7 @@ interface KopRowData {
   teks: string
   fontFamily: string
   fontSize: number
+  lineHeight: number
   bold: boolean
   italic: boolean
   uppercase: boolean
@@ -526,6 +527,7 @@ export default function Home() {
           teks: '',
           fontFamily: 'Times New Roman',
           fontSize: 12,
+          lineHeight: 1.3,
           bold: false,
           italic: false,
           uppercase: false,
@@ -2031,6 +2033,29 @@ export default function Home() {
                                           />
                                           <span className="text-[9px] text-muted-foreground">pt</span>
                                         </div>
+                                        {/* Line Height (Jarak Antar Baris) */}
+                                        <div className="flex items-center gap-0.5">
+                                          <label className="text-[9px] text-muted-foreground mr-0.5">Jarak:</label>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-6 w-6 p-0 text-[11px]"
+                                            onClick={() => updateKopRow(row.id, { lineHeight: Math.max(0.5, Math.round((row.lineHeight - 0.1) * 10) / 10) })}
+                                            disabled={row.lineHeight <= 0.5}
+                                          >
+                                            ↓
+                                          </Button>
+                                          <span className="text-[10px] w-6 text-center font-mono">{row.lineHeight?.toFixed(1) || '1.3'}</span>
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-6 w-6 p-0 text-[11px]"
+                                            onClick={() => updateKopRow(row.id, { lineHeight: Math.min(3.0, Math.round((row.lineHeight + 0.1) * 10) / 10) })}
+                                            disabled={row.lineHeight >= 3.0}
+                                          >
+                                            ↑
+                                          </Button>
+                                        </div>
                                         {/* Bold */}
                                         <Button
                                           variant={row.bold ? 'default' : 'outline'}
@@ -2089,7 +2114,7 @@ export default function Home() {
                                             fontWeight: row.bold ? 'bold' : 'normal',
                                             fontStyle: row.italic ? 'italic' : 'normal',
                                             textTransform: row.uppercase ? 'uppercase' : 'none',
-                                            lineHeight: 1.3,
+                                            lineHeight: row.lineHeight || 1.3,
                                             color: '#000',
                                           }}
                                         >
@@ -2923,7 +2948,7 @@ export default function Home() {
                                   fontWeight: row.bold ? 'bold' : 'normal',
                                   fontStyle: row.italic ? 'italic' : 'normal',
                                   textTransform: row.uppercase ? 'uppercase' : 'none',
-                                  lineHeight: 1.3,
+                                  lineHeight: row.lineHeight || 1.3,
                                 }}
                               >
                                 {row.teks || '........................'}
