@@ -3410,14 +3410,6 @@ export default function Home() {
                                     <div>
                                       {kopSurat}
 
-                                      {/* Info Sekolah di bawah KOP */}
-                                      <div className="text-center text-[9pt]" style={{ lineHeight: '1.3' }}>
-                                        <p>NIS : {sekolahData.npsn ? '300010' : '..........'} NPSN : {sekolahData.npsn || '..........'} Terakreditasi A NSS: {sekolahData.npsn ? '301071701001' : '..........'}</p>
-                                        <p>{sekolahData.alamat || '.......................................................................................'}</p>
-                                        <p>Telp/HP: ....................; Kode Pos: ............</p>
-                                        <p>Email: ................................; website: ................................</p>
-                                      </div>
-
                                       {/* Judul SURAT PESANAN */}
                                       <div className="text-center mt-2 mb-1">
                                         <p className="font-bold text-[13pt]">SURAT PESANAN</p>
