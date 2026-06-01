@@ -3492,40 +3492,33 @@ export default function Home() {
                                           )}
                                           {/* Harga sebelum PPN */}
                                           <tr>
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-right font-bold">Harga sebelum PPN</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right font-bold">Harga sebelum PPN</td>
                                             <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah)}</td>
                                           </tr>
                                           {/* DPP PPN */}
                                           <tr>
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-right">DPP PPN</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">DPP PPN</td>
                                             <td className="border border-black px-2 py-0.5 text-right">{fmtRp(Math.round(totalJumlah / 1.11))}</td>
                                           </tr>
                                           {/* PPN 11% */}
                                           <tr>
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-right">PPN 11%</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">PPN 11%</td>
                                             <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah - Math.round(totalJumlah / 1.11))}</td>
                                           </tr>
                                           {/* Total Pembayaran */}
                                           <tr className="font-bold">
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-right">Total Pembayaran</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">Total Pembayaran</td>
                                             <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah)}</td>
                                           </tr>
                                           {/* PPh 23 2% */}
                                           <tr>
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-right">PPh 23 2%</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">PPh 23 2%</td>
                                             <td className="border border-black px-2 py-0.5 text-right">-</td>
                                           </tr>
                                           {/* Terbilang */}
                                           <tr>
-                                            <td className="border border-black px-1 py-0.5"></td>
-                                            <td className="border border-black px-2 py-0.5 text-center italic" style={{ width: '20%' }}>Terbilang</td>
-                                            <td colSpan={4} className="border border-black px-2 py-0.5 text-center italic">
-                                              {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}
+                                            <td colSpan={6} className="border border-black px-2 py-0.5 text-center italic">
+                                              Terbilang : {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}
                                             </td>
                                           </tr>
                                         </tbody>
