@@ -643,13 +643,25 @@ async function parseRKASFile(fileName: string, buffer?: Buffer): Promise<RKASMon
         info = await processPDFBuffer(fileName, buffer);
       } else {
         const blobInfo = await getBlobInfo(fileName);
-        if (!blobInfo) return null;
+        if (!blobInfo) {
+          console.error(`RKAS parse: blob not found for ${fileName}`);
+          return null;
+        }
         info = await processPDF(fileName);
       }
       const fullText = info.extractedText.map(p => p.text).join('\n');
-      return parseRKASFromText(fullText, fileName);
-    } catch (err) {
-      console.error(`Failed to parse RKAS ${fileName} (serverless):`, err);
+      console.log(`RKAS parse: extracted ${fullText.length} chars from ${fileName}, pages: ${info.pageCount}`);
+      if (!fullText.trim()) {
+        console.error(`RKAS parse: no text extracted from ${fileName}`);
+        return null;
+      }
+      const result = parseRKASFromText(fullText, fileName);
+      if (!result) {
+        console.error(`RKAS parse: parseRKASFromText returned null for ${fileName}`);
+      }
+      return result;
+    } catch (err: any) {
+      console.error(`Failed to parse RKAS ${fileName} (serverless):`, err?.message || err);
       return null;
     }
   }
@@ -905,7 +917,7 @@ export async function POST(request: Request) {
       // Serverless: upload to blob + parse directly from buffer
       await uploadToBlob(file.name, buffer);
       const data = await parseRKASFile(file.name, buffer);
-      if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
+      if (!data) return NextResponse.json({ error: 'Failed to parse RKAS', hint: 'Text extraction may have failed or returned empty data' }, { status: 500 });
 
       // Deduplicate: delete other blob files with same key
       let replacedFile: string | null = null;

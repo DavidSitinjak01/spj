@@ -20,13 +20,46 @@ export async function GET() {
     diagnostics.pdfjsDistGetDocument = typeof pdfjsLib.getDocument;
   } catch (e: any) {
     diagnostics.pdfjsDist = `FAILED: ${e.message}`;
+    diagnostics.pdfjsDistStack = e.stack?.substring(0, 500);
   }
 
-  // Test Vercel Blob
+  // Test full text extraction from a blob file
   try {
-    const { list } = await import("@vercel/blob");
-    const result = await list({ prefix: "pdfs/", limit: 1 });
-    diagnostics.vercelBlob = `connected, ${result.blobs.length} blob(s) found`;
+    const { list, get } = await import("@vercel/blob");
+    const { blobs } = await list({ prefix: "pdfs/", limit: 1 });
+
+    if (blobs.length > 0) {
+      diagnostics.testBlob = blobs[0].pathname;
+
+      // Try to download and parse the blob
+      try {
+        const blobData = await get(blobs[0].pathname, { access: "private" });
+        const arrayBuffer = await blobData.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        diagnostics.blobDownloadSize = buffer.length;
+
+        // Try to extract text with pdfjs-dist
+        try {
+          const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+          const uint8 = new Uint8Array(buffer);
+          const doc = await pdfjsLib.getDocument({ data: uint8 }).promise;
+          diagnostics.pdfPageCount = doc.numPages;
+
+          const page = await doc.getPage(1);
+          const textContent = await page.getTextContent();
+          const text = textContent.items.map((item: any) => item.str).join(" ");
+          diagnostics.pdfTextPreview = text.substring(0, 200);
+          diagnostics.pdfTextLength = text.length;
+        } catch (pdfErr: any) {
+          diagnostics.pdfExtractionError = pdfErr.message;
+          diagnostics.pdfExtractionStack = pdfErr.stack?.substring(0, 500);
+        }
+      } catch (dlErr: any) {
+        diagnostics.blobDownloadError = dlErr.message;
+      }
+    } else {
+      diagnostics.testBlob = "no blobs found";
+    }
   } catch (e: any) {
     diagnostics.vercelBlob = `FAILED: ${e.message}`;
   }

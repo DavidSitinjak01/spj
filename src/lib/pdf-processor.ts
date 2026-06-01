@@ -190,7 +190,15 @@ async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   // Use pdfjs-dist (Mozilla PDF.js) for reliable text extraction in serverless
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const uint8 = new Uint8Array(buffer);
-  const doc = await pdfjsLib.getDocument({ data: uint8 }).promise;
+
+  // Disable worker for serverless environments (runs on main thread)
+  // This avoids issues with worker file not being available in serverless
+  const doc = await pdfjsLib.getDocument({
+    data: uint8,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    useSystemFonts: true,
+  }).promise;
 
   const perPageText: { page: number; text: string }[] = [];
   let fullText = '';
