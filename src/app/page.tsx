@@ -3546,8 +3546,8 @@ export default function Home() {
                                         </div>
                                       </div>
 
-                                      {/* TANDA PEMBAYARAN (Kuitansi) */}
-                                      <div className="mt-6 border-t border-black pt-3">
+                                      {/* TANDA PEMBAYARAN (Kuitansi) - Halaman baru saat cetak */}
+                                      <div className="mt-6 border-t border-black pt-3" style={{ breakBefore: 'page' }}>
                                         <table className="w-full text-[10pt] mb-2">
                                           <tbody>
                                             <tr>
