@@ -777,7 +777,12 @@ export default function Home() {
       clone.style.boxShadow = 'none'
       printArea.innerHTML = ''
       printArea.appendChild(clone)
+      // Remove page title so browser doesn't print header/footer text
+      const originalTitle = document.title
+      document.title = ' '
       window.print()
+      // Restore title
+      document.title = originalTitle
       printArea.innerHTML = ''
     }
   }
