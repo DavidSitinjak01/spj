@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
 
 // --- Interfaces ---
 interface BKUPajakTransaction {
@@ -409,6 +410,9 @@ function parseBKUPajakFile(fileName: string): BKUPajakMonth | null {
 
 // GET: List all BKU Pajak files and their parsed data
 export async function GET() {
+  if (isServerless()) {
+    return serverlessErrorResponse('BKU Pajak');
+  }
   try {
     if (!fs.existsSync(UPLOAD_DIR)) {
       return NextResponse.json({ months: [], files: [] });
@@ -467,6 +471,9 @@ export async function GET() {
 
 // POST: Import a new BKU Pajak file
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('BKU Pajak');
+  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -512,6 +519,9 @@ export async function POST(request: Request) {
 
 // DELETE: Remove a BKU Pajak file and its cache
 export async function DELETE(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('BKU Pajak');
+  }
   try {
     const body = await request.json();
     const { fileName } = body;

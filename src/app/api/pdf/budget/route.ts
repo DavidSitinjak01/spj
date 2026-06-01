@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { processPDF } from '@/lib/pdf-processor';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
 
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
 
 function getBudgetCachePath(fileName: string): string {
   return path.join(CACHE_DIR, `${fileName}.budget.json`);
@@ -16,6 +17,9 @@ function getFileModTime(fileName: string): number {
 }
 
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('Budget');
+  }
   try {
     const { fileName } = await request.json();
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });

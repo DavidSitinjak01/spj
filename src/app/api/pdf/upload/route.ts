@@ -2,10 +2,14 @@ import { NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { processPDF, renderPDFPages } from '@/lib/pdf-processor';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('Upload PDF');
+  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;

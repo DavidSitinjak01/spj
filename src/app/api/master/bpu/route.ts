@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
 
@@ -255,6 +256,9 @@ export async function DELETE(request: Request) {
 // ─── PATCH: Sync BPU data from BKU cache files ─────────────────────────────────
 
 export async function PATCH() {
+  if (isServerless()) {
+    return serverlessErrorResponse('Sync BPU');
+  }
   try {
     const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
 

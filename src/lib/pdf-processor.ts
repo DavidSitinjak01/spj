@@ -1,15 +1,23 @@
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { isServerless } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const PUBLIC_PAGES_DIR = path.join(process.cwd(), 'public', 'pdf-pages');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
 
-// Ensure directories exist
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-if (!fs.existsSync(PUBLIC_PAGES_DIR)) fs.mkdirSync(PUBLIC_PAGES_DIR, { recursive: true });
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+// Ensure directories exist (only on non-serverless environments)
+// Wrapped in try/catch to avoid crashes on Vercel's read-only filesystem
+if (!isServerless()) {
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    if (!fs.existsSync(PUBLIC_PAGES_DIR)) fs.mkdirSync(PUBLIC_PAGES_DIR, { recursive: true });
+    if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+  } catch {
+    // Silently fail on read-only filesystems (e.g., Vercel)
+  }
+}
 
 export interface PDFInfo {
   fileName: string;
@@ -36,6 +44,7 @@ function getCachePath(fileName: string): string {
 }
 
 function getFileModTime(fileName: string): number {
+  if (isServerless()) return 0;
   const filePath = path.join(UPLOAD_DIR, fileName);
   try {
     return fs.statSync(filePath).mtimeMs;
@@ -45,6 +54,8 @@ function getFileModTime(fileName: string): number {
 }
 
 function readCache(fileName: string): CachedData | null {
+  if (isServerless()) return null;
+
   // Check memory cache first
   const memCached = memoryCache.get(fileName);
   if (memCached && memCached.fileModifiedAt === getFileModTime(fileName)) {
@@ -69,6 +80,7 @@ function readCache(fileName: string): CachedData | null {
 
 function writeCache(fileName: string, data: CachedData): void {
   memoryCache.set(fileName, data);
+  if (isServerless()) return;
   try {
     fs.writeFileSync(getCachePath(fileName), JSON.stringify(data));
   } catch {
@@ -77,11 +89,20 @@ function writeCache(fileName: string, data: CachedData): void {
 }
 
 export function getPDFFiles(): string[] {
-  if (!fs.existsSync(UPLOAD_DIR)) return [];
-  return fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.pdf'));
+  if (isServerless()) return [];
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) return [];
+    return fs.readdirSync(UPLOAD_DIR).filter(f => f.endsWith('.pdf'));
+  } catch {
+    return [];
+  }
 }
 
 export function processPDF(fileName: string): PDFInfo {
+  if (isServerless()) {
+    throw new Error('Fitur PDF tidak tersedia di deployment serverless. Gunakan versi lokal.');
+  }
+
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) {
     throw new Error(`PDF file not found: ${fileName}`);
@@ -134,6 +155,10 @@ print(json.dumps(result))
 }
 
 export function renderPDFPages(fileName: string): string[] {
+  if (isServerless()) {
+    return [];
+  }
+
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) {
     throw new Error(`PDF file not found: ${fileName}`);
@@ -230,6 +255,9 @@ print("\\n".join(pages))
 }
 
 export function getExtractedText(fileName: string): { page: number; text: string }[] {
+  if (isServerless()) {
+    return [];
+  }
   const info = processPDF(fileName);
   return info.extractedText;
 }

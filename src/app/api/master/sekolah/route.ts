@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { isServerless } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
 
@@ -68,6 +69,9 @@ function readSchoolFromBKUCache(): {
     kepalaSekolah: '',
     bendahara: '',
   };
+
+  // Skip fs operations on serverless (Vercel)
+  if (isServerless()) return result;
 
   try {
     if (!fs.existsSync(CACHE_DIR)) return result;

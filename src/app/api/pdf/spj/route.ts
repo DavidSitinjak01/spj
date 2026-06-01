@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
 
 // --- Types ---
 interface SPJItem {
@@ -411,6 +412,9 @@ function buildSPJTahunan(rkasTahunan: any, bkuMonths: any[]): SPJSummary['tahuna
 
 // --- API Handler ---
 export async function GET() {
+  if (isServerless()) {
+    return serverlessErrorResponse('SPJ');
+  }
   try {
     const rkasMonths = loadRKASData();
     const bkuMonths = loadBKUData();

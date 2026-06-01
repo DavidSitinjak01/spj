@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { processPDF } from '@/lib/pdf-processor';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('Ringkasan PDF');
+  }
   try {
     const { fileName } = await request.json();
 

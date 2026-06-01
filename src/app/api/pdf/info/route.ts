@@ -2,10 +2,14 @@ import { NextResponse } from 'next/server';
 import { processPDF, renderPDFPages, getPDFFiles } from '@/lib/pdf-processor';
 import fs from 'fs';
 import path from 'path';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 
 export async function GET(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('Info PDF');
+  }
   try {
     const { searchParams } = new URL(request.url);
     const fileName = searchParams.get('file');

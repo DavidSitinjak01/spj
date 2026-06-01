@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
 
 // --- Interfaces ---
 interface RKASItem {
@@ -497,6 +498,9 @@ function parseRKASFile(fileName: string): RKASMonth | null {
 
 // GET: List all RKAS files and their parsed data
 export async function GET() {
+  if (isServerless()) {
+    return serverlessErrorResponse('RKAS');
+  }
   try {
     if (!fs.existsSync(UPLOAD_DIR)) {
       return NextResponse.json({ months: [], bulanan: [], tahunan: [], files: [] });
@@ -560,6 +564,9 @@ export async function GET() {
 
 // POST: Import a new RKAS file
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('RKAS');
+  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -608,6 +615,9 @@ export async function POST(request: Request) {
 
 // DELETE: Remove an RKAS file and its cache
 export async function DELETE(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('RKAS');
+  }
   try {
     const body = await request.json();
     const { fileName } = body;

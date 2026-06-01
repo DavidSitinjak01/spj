@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
+import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload', 'spj-docs');
 const CACHE_FILE = path.join(process.cwd(), '.pdf-cache', 'spj-docs.json');
 
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-if (!fs.existsSync(path.dirname(CACHE_FILE))) fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });
+try { if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
+try { if (!fs.existsSync(path.dirname(CACHE_FILE))) fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true }); } catch {}
 
 // --- Types ---
 export type SPJDocType = 'surat-pesanan' | 'surat-balasan' | 'bast' | 'dokumen-perencanaan' | 'surat-hasil-pemeriksaan';
@@ -75,6 +76,9 @@ function buildCompletenessMap(docs: SPJDocument[]): Record<string, Record<SPJDoc
 
 // --- GET: List all SPJ documents with completeness info ---
 export async function GET(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('SPJ Dokumen');
+  }
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') as SPJDocType | null;
@@ -129,6 +133,9 @@ export async function GET(request: Request) {
 
 // --- POST: Upload SPJ document linked to a spending item ---
 export async function POST(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('SPJ Dokumen');
+  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
@@ -220,6 +227,9 @@ export async function POST(request: Request) {
 
 // --- DELETE: Remove SPJ document ---
 export async function DELETE(request: Request) {
+  if (isServerless()) {
+    return serverlessErrorResponse('SPJ Dokumen');
+  }
   try {
     const body = await request.json();
     const { id, fileName } = body;
