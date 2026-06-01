@@ -770,7 +770,13 @@ export default function Home() {
     const printArea = document.getElementById('print-area')
     const docContent = document.getElementById(`doc-content-${docType}`)
     if (printArea && docContent) {
-      printArea.innerHTML = docContent.innerHTML
+      // Clone only the document content, strip wrapper divs
+      const clone = docContent.cloneNode(true) as HTMLElement
+      clone.removeAttribute('id')
+      clone.classList.remove('shadow-lg')
+      clone.style.boxShadow = 'none'
+      printArea.innerHTML = ''
+      printArea.appendChild(clone)
       window.print()
       printArea.innerHTML = ''
     }

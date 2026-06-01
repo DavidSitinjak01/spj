@@ -122,20 +122,42 @@
 }
 
 @media print {
+  /* Hide everything first */
   body * {
-    visibility: hidden;
+    visibility: hidden !important;
   }
+
+  /* Only show print area and its children */
   #print-area,
   #print-area * {
-    visibility: visible;
+    visibility: visible !important;
   }
+
   #print-area {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
-    background: white;
+    background: white !important;
     display: block !important;
+  }
+
+  /* Reset any shadows, borders from cards/wrappers inside print area */
+  #print-area .shadow-lg {
+    box-shadow: none !important;
+  }
+
+  /* Remove gray background wrappers */
+  #print-area .bg-gray-50,
+  #print-area .bg-gray-900,
+  #print-area .dark\:bg-gray-900 {
+    background: white !important;
+  }
+
+  /* Ensure proper page size */
+  @page {
+    size: A4;
+    margin: 0;
   }
 }
 
