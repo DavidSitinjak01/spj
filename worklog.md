@@ -1,23 +1,34 @@
 ---
 Task ID: 1
 Agent: Main Agent
-Task: Fix "Failed to parse RKAS" error on Vercel deployment
+Task: Fix "Failed to parse RKAS" error on Vercel serverless
 
 Work Log:
-- Analyzed the uploaded screenshot showing /api diagnostic endpoint output
-- VLM identified two critical errors: "DOMMatrix is not defined" (pdfjs-dist) and "r.arrayBuffer is not a function" (@vercel/blob get())
-- Investigated pdfjs-dist v6.0.227: it requires browser APIs (DOMMatrix) not available in Node.js serverless
-- Investigated @vercel/blob v2.4.0: get() API changed to return {stream, blob, headers} instead of a Blob with arrayBuffer()
-- Discovered pdf-parse v2.4.5 exports PDFParse class that works in Node.js without browser APIs
-- Tested pdf-parse v2.4.5 with actual PDF files (RKAS, BKU) - works correctly
-- Updated pdf-processor.ts: replaced pdfjs-dist with pdf-parse PDFParse class
-- Updated pdf-processor.ts: fixed downloadFromBlob/downloadFromBlobByPathname to use stream-based API
-- Added streamToBuffer() helper to convert ReadableStream<Uint8Array> to Buffer
-- Updated /api diagnostic endpoint to test new pdf-parse and stream-based blob downloads
-- Ran lint check - passes
-- Pushed to GitHub for Vercel deployment (commit 504c41d)
+- Investigated root cause: pdf-parse v2.4.5 extracts text in a completely different format from pdfplumber
+- pdf-parse produces tab-separated columns in visual order (left-to-right), not logical table order
+- Header fields (Nama Sekolah, Alamat, etc.) are split across multiple lines in pdf-parse output
+- Belanja rows have tabs separating columns but in different order than pdfplumber
+- "Total Penerimaan" appears AFTER "B. BELANJA" in pdf-parse output
+- Penerimaan kode regex didn't match deep nesting like "4.3.1.01."
+
+Fixes applied:
+1. Rewrote parseRKASFromText in both route.ts and pdf-text-parser.ts to handle pdf-parse format
+2. Added tab-aware parsing with hasTabs detection
+3. Added multi-line header extraction with field-order mapping (handles both bulanan and tahunan formats)
+4. Added "B. BELANJA" detection for belanja section start
+5. Added isTahunanTable detection from subsequent header lines (BOSP REGULER, SILPA, etc.)
+6. Fixed penerimaan regex: changed (?:\.\d+)? to (?:\.\d+)* to match "4.3.1.01"
+7. Added "Total Penerimaan" search after "B. BELANJA" (pdf-parse order issue)
+8. Added bulanan tab-separated format parsing with kode prog suffix/prefix handling
+9. Added tahunan tab-separated format parsing with budget number extraction
+10. Added better error logging in parseRKASFile
+
+Test results (local with pdf-parse):
+- Bulanan RKAS: 74 items parsed, all headers correct, total belanja = 185,010,000
+- Tahunan RKAS: 219 items parsed, all headers correct, total belanja = 1,345,510,009
 
 Stage Summary:
-- Root cause 1: pdfjs-dist requires DOMMatrix (browser API) not available in Node.js serverless → Fixed by switching to pdf-parse v2.4.5 PDFParse class
-- Root cause 2: @vercel/blob v2 get() returns {stream, blob, headers} not a Blob → Fixed by reading from stream with streamToBuffer()
-- All changes pushed to GitHub, pending Vercel deployment
+- Root cause: pdf-parse text format is completely different from pdfplumber (tab-separated, different column order, multi-line headers)
+- Fixed by making parseRKASFromText format-aware (pdf-parse vs pdfplumber detection via tab presence)
+- Both Bulanan and Tahunan RKAS formats now parse correctly with pdf-parse extracted text
+- Lint passes, dev server running correctly

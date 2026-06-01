@@ -427,15 +427,20 @@ export function parseBKUPajakFromText(text: string, fileName: string): BKUPajakM
 }
 
 // --- RKAS Text Parser ---
+// Handles BOTH pdfplumber format (local) and pdf-parse format (Vercel serverless)
 export function parseRKASFromText(text: string, fileName: string): RKASMonthData {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const hasTabs = text.includes('\t');
   const headerInfo: Record<string, string> = {};
 
   const judulParts: string[] = [];
-  for (const line of lines.slice(0, 10)) {
-    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan)\s*:/i, line)) break;
+  for (const line of lines.slice(0, 15)) {
+    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan|Sumber Dana)\s*:/i, line)) break;
     if (reSearch(/Halaman.*dari/i, line)) continue;
     if (reSearch(/Kertas Kerja.*NPSN/i, line)) continue;
+    if (reSearch(/^A\.\s*PENERIMAAN/i, line)) break;
+    if (reSearch(/^B\.\s*BELANJA/i, line)) break;
+    if (line === ':' || line.trim() === '') continue;
     judulParts.push(line);
   }
   headerInfo.judul = judulParts.join(' ');
@@ -447,9 +452,11 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
     headerInfo.tipeFromJudul = 'tahunan';
   }
 
+  // First pass: single-line format (pdfplumber style)
   for (const line of lines) {
     if (line.includes('Halaman') && line.includes('dari')) continue;
     if (line.includes('Kertas Kerja') && line.includes('NPSN')) continue;
+    if (line.includes('RKAS') && line.includes('NPSN')) continue;
 
     const bulanMatch = reMatch(/Bulan\s*:\s*(\w+)/i, line);
     if (bulanMatch) headerInfo.bulan = bulanMatch[1];
@@ -467,16 +474,16 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
     if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
 
     const sekolahMatch = reMatch(/Nama Sekolah\s*:\s*(.+)/i, line);
-    if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+    if (sekolahMatch && sekolahMatch[1].trim()) headerInfo.namaSekolah = sekolahMatch[1].trim();
 
     const alamatMatch = reMatch(/Alamat\s*:\s*(.+)/i, line);
-    if (alamatMatch) headerInfo.alamat = alamatMatch[1].trim();
+    if (alamatMatch && alamatMatch[1].trim()) headerInfo.alamat = alamatMatch[1].trim();
 
     const kabMatch = reMatch(/Kabupaten\s*:\s*(.+)/i, line);
-    if (kabMatch) headerInfo.kabupaten = kabMatch[1].trim();
+    if (kabMatch && kabMatch[1].trim()) headerInfo.kabupaten = kabMatch[1].trim();
 
     const provMatch = reMatch(/Provinsi\s*:\s*(.+)/i, line);
-    if (provMatch) headerInfo.provinsi = provMatch[1].trim();
+    if (provMatch && provMatch[1].trim()) headerInfo.provinsi = provMatch[1].trim();
 
     if (line.includes('Sumber Dana') && !line.includes('dan Alokasi')) {
       const sdMatch = reMatch(/Sumber Dana\s*:?\s*(.+)/i, line);
@@ -489,9 +496,84 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
     }
   }
 
+  // Second pass: multi-line format (pdf-parse style)
+   // In pdf-parse, ALL field names come first, then ALL colons, then ALL values
+  if (!headerInfo.namaSekolah || !headerInfo.alamat || !headerInfo.kabupaten || !headerInfo.provinsi) {
+    const fieldOrder: { name: string; lineIdx: number }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (reSearch(/^Nama Sekolah\s*:?\s*$/i, line)) fieldOrder.push({ name: 'namaSekolah', lineIdx: i });
+      else if (reSearch(/^Alamat\s*:?\s*$/i, line)) fieldOrder.push({ name: 'alamat', lineIdx: i });
+      else if (reSearch(/^Kabupaten\s*:?\s*$/i, line)) fieldOrder.push({ name: 'kabupaten', lineIdx: i });
+      else if (reSearch(/^Provinsi\s*:?\s*$/i, line)) fieldOrder.push({ name: 'provinsi', lineIdx: i });
+      else if (reSearch(/^Bulan\s*:?\s*$/i, line)) fieldOrder.push({ name: 'bulan', lineIdx: i });
+    }
+
+    if (fieldOrder.length >= 2) {
+      const lastFieldIdx = fieldOrder[fieldOrder.length - 1].lineIdx;
+      let colonEnd = -1;
+      for (let i = lastFieldIdx + 1; i < Math.min(lastFieldIdx + 10, lines.length); i++) {
+        if (lines[i].trim() === ':') colonEnd = i;
+        else if (colonEnd !== -1 && lines[i].trim() !== ':') break;
+      }
+
+      const valueStartIdx = colonEnd !== -1 ? colonEnd + 1 : lastFieldIdx + 1;
+      const values: string[] = [];
+      for (let i = valueStartIdx; i < Math.min(valueStartIdx + fieldOrder.length + 5, lines.length); i++) {
+        const candidate = lines[i].trim();
+        if (candidate === ':' || candidate === '') continue;
+        if (reSearch(/^(NPSN|A\.|B\.)/i, candidate)) break;
+        values.push(candidate);
+      }
+
+      for (let fi = 0; fi < fieldOrder.length && fi < values.length; fi++) {
+        const fieldName = fieldOrder[fi].name;
+        const value = values[fi];
+        if (fieldName === 'namaSekolah' && !headerInfo.namaSekolah) headerInfo.namaSekolah = value;
+        if (fieldName === 'alamat' && !headerInfo.alamat) headerInfo.alamat = value;
+        if (fieldName === 'kabupaten' && !headerInfo.kabupaten) headerInfo.kabupaten = value;
+        if (fieldName === 'provinsi' && !headerInfo.provinsi) headerInfo.provinsi = value;
+        if (fieldName === 'bulan' && !headerInfo.bulan) {
+          const bulanMatch = reMatch(/^(\w+)\s+\d{4}$/i, value);
+          if (bulanMatch) headerInfo.bulan = bulanMatch[1];
+          else headerInfo.bulan = value;
+        }
+      }
+    }
+  }
+
+  // Try to extract Bulan from "Februari 2026" pattern on its own line
+  if (!headerInfo.bulan) {
+    const bulanNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    for (const line of lines) {
+      for (const b of bulanNames) {
+        const m = reMatch(new RegExp(`(${b})\\s+(\\d{4})`, 'i'), line);
+        if (m) {
+          headerInfo.bulan = m[1];
+          if (!headerInfo.tahun) headerInfo.tahun = m[2];
+          break;
+        }
+      }
+      if (headerInfo.bulan) break;
+    }
+  }
+
   if (!headerInfo.tahun) {
     const tahunM = reMatch(/:\s*(\d{4})/, text);
     if (tahunM) headerInfo.tahun = tahunM[1];
+  }
+
+  // Sumber Dana from tab-separated line (pdf-parse format)
+  if (!headerInfo.sumberDana) {
+    for (const line of lines) {
+      if (line.includes('\t') && line.includes('Sumber Dana')) {
+        const parts = line.split('\t');
+        const sumberDanaPart = parts.find(p => p.trim() && !p.includes('Sumber Dana'));
+        if (sumberDanaPart) {
+          headerInfo.sumberDana = sumberDanaPart.trim();
+        }
+      }
+    }
   }
 
   // Penerimaan
@@ -501,7 +583,7 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
 
   for (const line of lines) {
     const upperLine = line.toUpperCase();
-    if (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO'))) {
+    if (reSearch(/^A\.\s*PENERIMAAN/i, line) || (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO')))) {
       inPenerimaan = true;
       continue;
     }
@@ -512,13 +594,23 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
         inPenerimaan = false;
         continue;
       }
-      if (upperLine.includes('BELANJA') || upperLine.includes('PENGELUARAN')) {
+      if (upperLine.startsWith('B.') && upperLine.includes('BELANJA')) {
         inPenerimaan = false;
         continue;
       }
-      const match = reMatch(/^(\d+\.\d+(?:\.\d+)?)\s+(.+?)\s+([\d.]+)$/, line);
+      const match = reMatch(/^(\d+\.\d+(?:\.\d+)*)\.?\s+(.+?)\s+([\d.]+)$/, line);
       if (match) {
         penerimaan.push({ kode: match[1], nama: match[2].trim(), jumlah: parseAmount(match[3]) });
+      }
+    }
+  }
+
+  // Also check for "Total Penerimaan" anywhere (pdf-parse puts it after "B. BELANJA")
+  if (totalPenerimaan === 0) {
+    for (const line of lines) {
+      if (line.toUpperCase().includes('TOTAL') && line.toUpperCase().includes('PENERIMAAN')) {
+        const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
+        if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
       }
     }
   }
@@ -534,37 +626,197 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
   }[] = [];
 
   let inBelanja = false;
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
-    if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
-        (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
-      inBelanja = true;
-      continue;
+
+  if (hasTabs) {
+    // pdf-parse tab-separated format
+    let isTahunanTable = false;
+    let belanjaHeaderLines = 0;
+
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+
+      if (reSearch(/^B\.\s*BELANJA/i, line) ||
+          (upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
+          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
+        inBelanja = true;
+        belanjaHeaderLines = 0;
+        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI') || upperLine.includes('OPERASI')) {
+          isTahunanTable = true;
+        }
+        continue;
+      }
+      if (!inBelanja) continue;
+
+      // Count header lines and detect tahunan table type
+      belanjaHeaderLines++;
+      if (belanjaHeaderLines <= 20) {
+        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI ANGGARAN') || 
+            (upperLine.includes('BOSP') && upperLine.includes('REGULER')) ||
+            upperLine.includes('SILPA')) {
+          isTahunanTable = true;
+        }
+      }
+
+      // Skip "Total Penerimaan" line (pdf-parse puts it after B. BELANJA)
+      if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) continue;
+      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
+      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
+      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
+      if (upperLine.includes('KODE') && upperLine.includes('REKENING')) continue;
+      if (upperLine.includes('KODE') && upperLine.includes('KEGIATAN')) continue;
+      if (upperLine.includes('BOSP') && (upperLine.includes('REGULER') || upperLine.includes('DAERAH'))) continue;
+      if (upperLine.includes('Halaman') && upperLine.includes('dari')) continue;
+      if (upperLine.includes('Kertas Kerja') || upperLine.includes('RKAS')) continue;
+      if (upperLine.includes('MODAL') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SiLPA')) continue;
+      if (upperLine.includes('Jumlah') && line.split('\t').length <= 2) continue;
+
+      const tabs = line.split('\t');
+
+      if (isTahunanTable) {
+        if (tabs.length < 2) continue;
+        const firstPart = tabs[0].trim();
+        const secondPart = tabs[1]?.trim() || '';
+
+        const firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
+        if (!firstMatch) continue;
+
+        const noUrut = firstMatch[1];
+        const kodeProgram = firstMatch[2];
+
+        let kodeRekening = '';
+        let uraian = '';
+        let jumlah = '';
+
+        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, secondPart);
+        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1])) {
+          kodeRekening = kodeRekMatch[1];
+          const rest = kodeRekMatch[2];
+          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, rest);
+          if (uraianJumlahMatch) {
+            uraian = uraianJumlahMatch[1].trim();
+            jumlah = uraianJumlahMatch[2];
+          } else {
+            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, rest);
+            if (simpleUJ) { uraian = simpleUJ[1].trim(); jumlah = simpleUJ[2]; }
+          }
+        } else {
+          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, secondPart);
+          if (uraianJumlahMatch) {
+            uraian = uraianJumlahMatch[1].trim();
+            jumlah = uraianJumlahMatch[2];
+          } else {
+            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, secondPart);
+            if (simpleUJ) { uraian = simpleUJ[1].trim(); jumlah = simpleUJ[2]; }
+            else uraian = secondPart;
+          }
+        }
+
+        belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume: '', satuan: '', tarifHarga: '', jumlah });
+      } else {
+        // Bulanan format with tabs
+        if (!reSearch(/^\d/, line.replace(/^\s*/, ''))) continue;
+        if (upperLine.startsWith('HALAMAN')) continue;
+
+        let kodeProgSuffix = '';
+        let mainDataPart = '';
+        let volumePart = '';
+        let kodeRekening = '';
+        let kodeProgParts: string[] = [];
+
+        const firstPart = tabs[0].trim();
+
+        if (reMatch(/^(\d{2})\.\s*$/, firstPart)) {
+          kodeProgSuffix = firstPart.trim();
+          mainDataPart = tabs[1]?.trim() || '';
+          const remaining = tabs.slice(2);
+          let volIdx = 0;
+          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
+            volumePart = remaining[0].trim();
+            volIdx = 1;
+          }
+          const kodeParts = remaining.slice(volIdx);
+          for (const kp of kodeParts) {
+            const trimmed = kp.trim();
+            if (!trimmed) continue;
+            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) kodeRekening = trimmed;
+            else if (reMatch(/^\d{2}\.\s*$/, trimmed)) kodeProgParts.push(trimmed);
+          }
+        } else {
+          mainDataPart = firstPart;
+          const remaining = tabs.slice(1);
+          let volIdx = 0;
+          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
+            volumePart = remaining[0].trim();
+            volIdx = 1;
+          }
+          const kodeParts = remaining.slice(volIdx);
+          for (const kp of kodeParts) {
+            const trimmed = kp.trim();
+            if (!trimmed) continue;
+            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) kodeRekening = trimmed;
+            else if (reMatch(/^\d{2}\.\s*$/, trimmed)) kodeProgParts.push(trimmed);
+          }
+        }
+
+        const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
+        if (!mainMatch) continue;
+
+        const noUrut = mainMatch[1];
+        const uraian = mainMatch[2].trim();
+        const jumlah = mainMatch[3];
+        const kodeProgram = [...kodeProgParts, kodeProgSuffix].join('').replace(/\s/g, '');
+
+        let volume = '';
+        let satuan = '';
+        let tarifHarga = '';
+        if (volumePart) {
+          const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
+          if (volMatch) { volume = volMatch[1]; satuan = volMatch[2].trim(); tarifHarga = volMatch[3]; }
+          else {
+            const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
+            if (volMatch2) { volume = volMatch2[1]; satuan = volMatch2[2].trim(); }
+          }
+        }
+
+        belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah });
+      }
     }
-    if (!inBelanja) continue;
+  } else {
+    // pdfplumber format (no tabs)
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+      if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
+          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
+        inBelanja = true;
+        continue;
+      }
+      if (!inBelanja) continue;
 
-    if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
-    if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
-    if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
-    if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
+      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
+      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
+      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
 
-    const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
-    if (fullMatch) {
-      belanjaRaw.push({
-        noUrut: fullMatch[1], kodeRekening: fullMatch[2], kodeProgram: fullMatch[3],
-        uraian: fullMatch[4].trim(), volume: fullMatch[5], satuan: fullMatch[6],
-        tarifHarga: fullMatch[7], jumlah: fullMatch[8],
-      });
-      continue;
-    }
+      const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
+      if (fullMatch) {
+        belanjaRaw.push({
+          noUrut: fullMatch[1], kodeRekening: fullMatch[2], kodeProgram: fullMatch[3],
+          uraian: fullMatch[4].trim(), volume: fullMatch[5], satuan: fullMatch[6],
+          tarifHarga: fullMatch[7], jumlah: fullMatch[8],
+        });
+        continue;
+      }
 
-    const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
-    if (simpleMatch) {
-      belanjaRaw.push({
-        noUrut: simpleMatch[1], kodeRekening: simpleMatch[2], kodeProgram: simpleMatch[3],
-        uraian: simpleMatch[4].trim(), volume: '', satuan: '', tarifHarga: '', jumlah: simpleMatch[5],
-      });
-      continue;
+      const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
+      if (simpleMatch) {
+        belanjaRaw.push({
+          noUrut: simpleMatch[1], kodeRekening: simpleMatch[2], kodeProgram: simpleMatch[3],
+          uraian: simpleMatch[4].trim(), volume: '', satuan: '', tarifHarga: '', jumlah: simpleMatch[5],
+        });
+        continue;
+      }
     }
   }
 

@@ -95,18 +95,24 @@ function extractStandarCode(kodeProgram: string): string {
 }
 
 // --- Serverless: Parse RKAS from extracted text using regex ---
+// Handles BOTH pdfplumber format (local) and pdf-parse format (Vercel serverless)
+// pdf-parse produces tab-separated columns in a different order than pdfplumber
 function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const hasTabs = text.includes('\t');
 
   // --- Extract header info ---
   const headerInfo: Record<string, string> = {};
 
   // Extract judul from first meaningful lines
   const judulParts: string[] = [];
-  for (const line of lines.slice(0, 10)) {
-    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan)\s*:/i, line)) break;
+  for (const line of lines.slice(0, 15)) {
+    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan|Sumber Dana)\s*:/i, line)) break;
     if (reSearch(/Halaman.*dari/i, line)) continue;
     if (reSearch(/Kertas Kerja.*NPSN/i, line)) continue;
+    if (reSearch(/^A\.\s*PENERIMAAN/i, line)) break;
+    if (reSearch(/^B\.\s*BELANJA/i, line)) break;
+    if (line === ':' || line.trim() === '') continue;
     judulParts.push(line);
   }
   headerInfo.judul = judulParts.join(' ');
@@ -119,47 +125,44 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     headerInfo.tipeFromJudul = 'tahunan';
   }
 
+  // --- Header extraction ---
+  // pdf-parse format: field name, colon, and value may be on separate lines
+  // pdfplumber format: "Nama Sekolah : VALUE" on one line
+  // We handle both formats
+
+  // First pass: try single-line format (pdfplumber style)
   for (const line of lines) {
-    // Skip footer lines
     if (line.includes('Halaman') && line.includes('dari')) continue;
     if (line.includes('Kertas Kerja') && line.includes('NPSN')) continue;
+    if (line.includes('RKAS') && line.includes('NPSN')) continue;
 
-    // Bulan
     const bulanMatch = reMatch(/Bulan\s*:\s*(\w+)/i, line);
     if (bulanMatch) headerInfo.bulan = bulanMatch[1];
 
-    // Tahun from "TAHUN ANGGARAN"
     const tahunMatch = reMatch(/TAHUN ANGGARAN\s*:\s*(\d{4})/i, line);
     if (tahunMatch) headerInfo.tahun = tahunMatch[1];
 
-    // "Bulan : Januari 2026" pattern
     const bulanTahun = reMatch(/Bulan\s*:\s*(\w+)\s+(\d{4})/i, line);
     if (bulanTahun) {
       headerInfo.bulan = bulanTahun[1];
       headerInfo.tahun = bulanTahun[2];
     }
 
-    // NPSN
     const npsnMatch = reMatch(/NPSN\s*:\s*(\d+)/i, line);
     if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
 
-    // Nama Sekolah
     const sekolahMatch = reMatch(/Nama Sekolah\s*:\s*(.+)/i, line);
-    if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+    if (sekolahMatch && sekolahMatch[1].trim()) headerInfo.namaSekolah = sekolahMatch[1].trim();
 
-    // Alamat
     const alamatMatch = reMatch(/Alamat\s*:\s*(.+)/i, line);
-    if (alamatMatch) headerInfo.alamat = alamatMatch[1].trim();
+    if (alamatMatch && alamatMatch[1].trim()) headerInfo.alamat = alamatMatch[1].trim();
 
-    // Kabupaten
     const kabMatch = reMatch(/Kabupaten\s*:\s*(.+)/i, line);
-    if (kabMatch) headerInfo.kabupaten = kabMatch[1].trim();
+    if (kabMatch && kabMatch[1].trim()) headerInfo.kabupaten = kabMatch[1].trim();
 
-    // Provinsi
     const provMatch = reMatch(/Provinsi\s*:\s*(.+)/i, line);
-    if (provMatch) headerInfo.provinsi = provMatch[1].trim();
+    if (provMatch && provMatch[1].trim()) headerInfo.provinsi = provMatch[1].trim();
 
-    // Sumber Dana
     if (line.includes('Sumber Dana') && !line.includes('dan Alokasi')) {
       const sdMatch = reMatch(/Sumber Dana\s*:?\s*(.+)/i, line);
       if (sdMatch) {
@@ -171,47 +174,143 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     }
   }
 
+  // Second pass: handle multi-line format (pdf-parse style)
+   // In pdf-parse, ALL field names come first, then ALL colons, then ALL values
+  // Pattern: "Nama Sekolah" \n "Alamat" \n ... \n ":" \n ":" \n ... \n "SMA NEGERI..." \n "JL...." \n ...
+  // Values are in the same order as field names
+  if (!headerInfo.namaSekolah || !headerInfo.alamat || !headerInfo.kabupaten || !headerInfo.provinsi) {
+    // Find all field name positions in order
+    const fieldOrder: { name: string; lineIdx: number }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (reSearch(/^Nama Sekolah\s*:?\s*$/i, line)) fieldOrder.push({ name: 'namaSekolah', lineIdx: i });
+      else if (reSearch(/^Alamat\s*:?\s*$/i, line)) fieldOrder.push({ name: 'alamat', lineIdx: i });
+      else if (reSearch(/^Kabupaten\s*:?\s*$/i, line)) fieldOrder.push({ name: 'kabupaten', lineIdx: i });
+      else if (reSearch(/^Provinsi\s*:?\s*$/i, line)) fieldOrder.push({ name: 'provinsi', lineIdx: i });
+      else if (reSearch(/^Bulan\s*:?\s*$/i, line)) fieldOrder.push({ name: 'bulan', lineIdx: i });
+    }
+
+    if (fieldOrder.length >= 2) {
+      // Find value lines after the field names
+      // Two patterns:
+      // 1. Bulanan: field names → colon lines → value lines
+      // 2. Tahunan: "Nama Sekolah :" → value lines (colons on same line as field names)
+      const lastFieldIdx = fieldOrder[fieldOrder.length - 1].lineIdx;
+      
+      // Find colon-only lines after the last field name (bulanan pattern)
+      let colonEnd = -1;
+      for (let i = lastFieldIdx + 1; i < Math.min(lastFieldIdx + 10, lines.length); i++) {
+        if (lines[i].trim() === ':') {
+          colonEnd = i;
+        } else if (colonEnd !== -1 && lines[i].trim() !== ':') {
+          break;
+        }
+      }
+
+      // Value lines start after colons (or right after last field if no colon block)
+      const valueStartIdx = colonEnd !== -1 ? colonEnd + 1 : lastFieldIdx + 1;
+      const values: string[] = [];
+      for (let i = valueStartIdx; i < Math.min(valueStartIdx + fieldOrder.length + 5, lines.length); i++) {
+        const candidate = lines[i].trim();
+        if (candidate === ':' || candidate === '') continue;
+        // Stop if we hit another known section
+        if (reSearch(/^(NPSN|A\.|B\.)/i, candidate)) break;
+        values.push(candidate);
+      }
+
+      // Map values to fields by order
+      for (let fi = 0; fi < fieldOrder.length && fi < values.length; fi++) {
+        const fieldName = fieldOrder[fi].name;
+        const value = values[fi];
+        if (fieldName === 'namaSekolah' && !headerInfo.namaSekolah) headerInfo.namaSekolah = value;
+        if (fieldName === 'alamat' && !headerInfo.alamat) headerInfo.alamat = value;
+        if (fieldName === 'kabupaten' && !headerInfo.kabupaten) headerInfo.kabupaten = value;
+        if (fieldName === 'provinsi' && !headerInfo.provinsi) headerInfo.provinsi = value;
+        if (fieldName === 'bulan' && !headerInfo.bulan) {
+          const bulanMatch = reMatch(/^(\w+)\s+\d{4}$/i, value);
+          if (bulanMatch) headerInfo.bulan = bulanMatch[1];
+          else headerInfo.bulan = value;
+        }
+      }
+    }
+  }
+
+  // Try to extract Bulan from "Februari 2026" pattern on its own line
+  if (!headerInfo.bulan) {
+    const bulanNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    for (const line of lines) {
+      for (const b of bulanNames) {
+        const m = reMatch(new RegExp(`(${b})\\s+(\\d{4})`, 'i'), line);
+        if (m) {
+          headerInfo.bulan = m[1];
+          if (!headerInfo.tahun) headerInfo.tahun = m[2];
+          break;
+        }
+      }
+      if (headerInfo.bulan) break;
+    }
+  }
+
   // If tahun not found, try generic
   if (!headerInfo.tahun) {
     const tahunM = reMatch(/:\s*(\d{4})/, text);
     if (tahunM) headerInfo.tahun = tahunM[1];
   }
 
+  // Sumber Dana from tab-separated line (pdf-parse format)
+  if (!headerInfo.sumberDana) {
+    for (const line of lines) {
+      if (line.includes('\t') && line.includes('Sumber Dana')) {
+        const parts = line.split('\t');
+        // In pdf-parse, "BOSP Reguler \t Sumber Dana" means sumber dana is the first part
+        const sumberDanaPart = parts.find(p => p.trim() && !p.includes('Sumber Dana'));
+        if (sumberDanaPart) {
+          headerInfo.sumberDana = sumberDanaPart.trim();
+        }
+      }
+    }
+  }
+
   // --- Extract Penerimaan (revenue) table from text ---
   const penerimaan: RKASPenerimaanItem[] = [];
   let totalPenerimaan = 0;
-
-  // Look for penerimaan section patterns
-  // Pattern: kode (like 1.01.01) followed by description followed by amount
-  const penerimaanRegex = /^(\d+\.\d+(?:\.\d+)?)\s+(.+?)\s+([\d.]+(?:\s*[\d.]*)*)$/;
   let inPenerimaan = false;
 
   for (const line of lines) {
     const upperLine = line.toUpperCase();
-    if (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO'))) {
+    // Detect penerimaan section - "A. PENERIMAAN" or "PENERIMAAN" with "KODE" or "NO"
+    if (reSearch(/^A\.\s*PENERIMAAN/i, line) || (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO')))) {
       inPenerimaan = true;
       continue;
     }
     if (inPenerimaan) {
-      // Check for total row
       if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) {
         const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
         if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
         inPenerimaan = false;
         continue;
       }
-      // Check if we've moved past penerimaan section
-      if (upperLine.includes('BELANJA') || upperLine.includes('PENGELUARAN')) {
+      if (upperLine.startsWith('B.') && upperLine.includes('BELANJA')) {
         inPenerimaan = false;
         continue;
       }
-      const match = reMatch(/^(\d+\.\d+(?:\.\d+)?)\s+(.+?)\s+([\d.]+)$/, line);
+      const match = reMatch(/^(\d+\.\d+(?:\.\d+)*)\.?\s+(.+?)\s+([\d.]+)$/, line);
       if (match) {
         penerimaan.push({
           kode: match[1],
           nama: match[2].trim(),
           jumlah: parseAmount(match[3]),
         });
+      }
+    }
+  }
+
+  // Also check for "Total Penerimaan" anywhere (pdf-parse puts it after "B. BELANJA")
+  if (totalPenerimaan === 0) {
+    for (const line of lines) {
+      if (line.toUpperCase().includes('TOTAL') && line.toUpperCase().includes('PENERIMAAN')) {
+        const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
+        if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
       }
     }
   }
@@ -226,64 +325,333 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     volume: string; satuan: string; tarifHarga: string; jumlah: string;
   }[] = [];
 
-  // Belanja items pattern: number, kode rekening (5.x.x.x), kode program (0x.x.x.x), uraian, volume, satuan, tarif, jumlah
-  // Try to match belanja rows line by line
-  // Pattern: starts with a number (no urut), then kode rekening, then kode program, then description, then numbers at end
-  const belanjaLineRegex = /^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+([\d.]*)\s*(\w*)\s*([\d.]*)\s*([\d.]+)$/;
-  // Simpler pattern for lines that might have varying column counts
-  const belanjaSimpleRegex = /^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+([\d.]+)\s*$/;
-
   let inBelanja = false;
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
-    if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
-        (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
-      inBelanja = true;
-      continue;
+
+  if (hasTabs) {
+    // --- pdf-parse tab-separated format ---
+    // Tab structure for bulanan:
+    //   [kodeProgSuffix.] \t [noUrut. uraian jumlah] \t [volume satuan tarif] \t [kodeProg1.] \t [kodeProg2.] \t [kodeRekening]
+    // Tab structure for tahunan:
+    //   [noUrut kodeProgram] \t [kodeRekening uraian budgetNumbers...] \t [more budget numbers]
+    
+    let isTahunanTable = false;
+    let belanjaHeaderLines = 0; // Count header lines to detect table type
+    
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+      
+      // Detect belanja section start
+      // Match "B. BELANJA", "BELANJA" with "NO" or "URUT", or "KODE REKENING" with "URAIAN"
+      if (reSearch(/^B\.\s*BELANJA/i, line) ||
+          (upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
+          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
+        inBelanja = true;
+        belanjaHeaderLines = 0;
+        // Detect tahunan vs bulanan from header
+        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI') || upperLine.includes('OPERASI')) {
+          isTahunanTable = true;
+        }
+        continue;
+      }
+      if (!inBelanja) continue;
+
+      // Count header lines and detect tahunan table type
+      belanjaHeaderLines++;
+      if (belanjaHeaderLines <= 20) {
+        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI ANGGARAN') || 
+            (upperLine.includes('BOSP') && upperLine.includes('REGULER')) ||
+            upperLine.includes('SILPA')) {
+          isTahunanTable = true;
+        }
+      }
+
+      // Skip header/subheader rows
+      // Skip "Total Penerimaan" line (pdf-parse puts it after B. BELANJA)
+      if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) continue;
+      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
+      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
+      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
+      if (upperLine.includes('KODE') && upperLine.includes('REKENING')) continue;
+      if (upperLine.includes('KODE') && upperLine.includes('KEGIATAN')) continue;
+      if (upperLine.includes('BOSP') && (upperLine.includes('REGULER') || upperLine.includes('DAERAH'))) continue;
+      if (upperLine.includes('Halaman') && upperLine.includes('dari')) continue;
+      if (upperLine.includes('Kertas Kerja') || upperLine.includes('RKAS')) continue;
+      if (upperLine.includes('MODAL') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SiLPA')) continue;
+      if (upperLine.includes('Jumlah') && line.split('\t').length <= 2) continue;
+
+      const tabs = line.split('\t');
+      
+      if (isTahunanTable) {
+        // Tahunan format:
+        // "1 02." \t "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0" \t "0 0 0 0 0 0"
+        // "4 02.02.01." \t "5.1.02.01.01.0052 Belanja Makanan 7.698.000 7.698.000 0 0 0" \t "0 0 0 0 0 0"
+        // "5 02.02.01." \t "5.1.02.01.01.0052 001. Snack Kotak-- 2.250.000 2.250.000 0 0 0" \t "0 0 0 0 0 0"
+        
+        if (tabs.length < 2) continue;
+        
+        const firstPart = tabs[0].trim();
+        const secondPart = tabs[1]?.trim() || '';
+        
+        // Parse first part: noUrut + kodeProgram
+        const firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
+        if (!firstMatch) continue;
+        
+        const noUrut = firstMatch[1];
+        const kodeProgram = firstMatch[2];
+        
+        // Parse second part: optional kodeRekening + uraian + jumlah
+        let kodeRekening = '';
+        let uraian = '';
+        let jumlah = '';
+        
+        // Check if second part starts with kode rekening (5.x.x.x pattern)
+        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, secondPart);
+        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1])) {
+          kodeRekening = kodeRekMatch[1];
+          const rest = kodeRekMatch[2];
+          // Extract uraian and first jumlah from rest
+          // Format: "001. Snack Kotak-- 2.250.000 2.250.000 0 0 0"
+          // or: "Belanja Makanan 7.698.000 7.698.000 0 0 0"
+          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, rest);
+          if (uraianJumlahMatch) {
+            uraian = uraianJumlahMatch[1].trim();
+            jumlah = uraianJumlahMatch[2];
+          } else {
+            // Try simpler: uraian followed by amounts
+            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, rest);
+            if (simpleUJ) {
+              uraian = simpleUJ[1].trim();
+              jumlah = simpleUJ[2];
+            }
+          }
+        } else {
+          // No kode rekening - this is a category/sub row
+          // Format: "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0"
+          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, secondPart);
+          if (uraianJumlahMatch) {
+            uraian = uraianJumlahMatch[1].trim();
+            jumlah = uraianJumlahMatch[2];
+          } else {
+            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, secondPart);
+            if (simpleUJ) {
+              uraian = simpleUJ[1].trim();
+              jumlah = simpleUJ[2];
+            } else {
+              uraian = secondPart;
+            }
+          }
+        }
+        
+        belanjaRaw.push({
+          noUrut,
+          kodeRekening,
+          kodeProgram,
+          uraian,
+          volume: '',
+          satuan: '',
+          tarifHarga: '',
+          jumlah,
+        });
+      } else {
+        // Bulanan format with tabs:
+        // Category: "1. Standar Proses 5.364.000 \t 03."
+        // Sub-category: "2. Pelaksanaan... 5.364.000 \t 03. \t 03."
+        // Sub-sub-cat: "08. \t 3. Program... 4.764.000 \t 03. \t 03."
+        // Detail+VST: "08. \t 4. Nasi Bungkus-- 3.150.000 \t 90 per bungkus 35.000 \t 03. \t 03. \t 5.1.02.01.01.0052"
+        // Detail only: "08. \t 3. Program... 4.764.000 \t 03. \t 03."
+        
+        // Skip lines that are clearly not data rows
+        if (!reSearch(/^\d/, line.replace(/^\s*/, ''))) continue;
+        if (upperLine.startsWith('HALAMAN')) continue;
+        
+        // Determine if first tab part is a kode program suffix (like "08.", "02.")
+        // or part of noUrut+uraian+jumlah
+        let kodeProgSuffix = '';
+        let mainDataPart = '';
+        let volumePart = '';
+        let kodeRekening = '';
+        let kodeProgParts: string[] = [];
+        
+        const firstPart = tabs[0].trim();
+        
+        // Check if first part is just a kode program suffix (like "08." or "02.")
+        if (reMatch(/^(\d{2})\.\s*$/, firstPart)) {
+          kodeProgSuffix = firstPart.trim();
+          mainDataPart = tabs[1]?.trim() || '';
+          // Remaining tabs: volume, kode prog parts, kode rekening
+          const remaining = tabs.slice(2);
+          
+          // Check if second remaining part looks like volume/satuan/tarif
+          // It contains things like "90 per bungkus 35.000" or "4 dus 66.000"
+          let volIdx = 0;
+          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
+            volumePart = remaining[0].trim();
+            volIdx = 1;
+          }
+          
+          // Parse remaining parts for kode program and kode rekening
+          const kodeParts = remaining.slice(volIdx);
+          for (const kp of kodeParts) {
+            const trimmed = kp.trim();
+            if (!trimmed) continue;
+            // Kode rekening pattern: starts with "5." and has multiple dots
+            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) {
+              kodeRekening = trimmed;
+            } else if (reMatch(/^\d{2}\.\s*$/, trimmed)) {
+              kodeProgParts.push(trimmed);
+            }
+          }
+        } else {
+          // First part contains noUrut + uraian + jumlah (no kode prog suffix)
+          mainDataPart = firstPart;
+          const remaining = tabs.slice(1);
+          
+          let volIdx = 0;
+          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
+            volumePart = remaining[0].trim();
+            volIdx = 1;
+          }
+          
+          const kodeParts = remaining.slice(volIdx);
+          for (const kp of kodeParts) {
+            const trimmed = kp.trim();
+            if (!trimmed) continue;
+            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) {
+              kodeRekening = trimmed;
+            } else if (reMatch(/^\d{2}\.\s*$/, trimmed)) {
+              kodeProgParts.push(trimmed);
+            }
+          }
+        }
+        
+        // Parse mainDataPart: "4. Nasi Bungkus-- 3.150.000" or "1. Standar Proses 5.364.000"
+        const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
+        if (!mainMatch) {
+          // Try with multi-line uraian (uraian might span to next line)
+          // Skip for now, handle in a second pass
+          continue;
+        }
+        
+        const noUrut = mainMatch[1];
+        const uraian = mainMatch[2].trim();
+        const jumlah = mainMatch[3];
+        
+        // Build kode program from parts + suffix
+        // kodeProgParts are the prefix parts (like ["03.", "03."])
+        // kodeProgSuffix is the suffix (like "08.")
+        const kodeProgram = [...kodeProgParts, kodeProgSuffix].join('').replace(/\s/g, '');
+        
+        // Parse volume part: "90 per bungkus 35.000" → volume=90, satuan="per bungkus", tarif=35000
+        let volume = '';
+        let satuan = '';
+        let tarifHarga = '';
+        if (volumePart) {
+          const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
+          if (volMatch) {
+            volume = volMatch[1];
+            satuan = volMatch[2].trim();
+            tarifHarga = volMatch[3];
+          } else {
+            // Maybe just volume + satuan without tarif
+            const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
+            if (volMatch2) {
+              volume = volMatch2[1];
+              satuan = volMatch2[2].trim();
+            }
+          }
+        }
+        
+        belanjaRaw.push({
+          noUrut,
+          kodeRekening,
+          kodeProgram,
+          uraian,
+          volume,
+          satuan,
+          tarifHarga,
+          jumlah,
+        });
+      }
     }
-    if (!inBelanja) continue;
+  } else {
+    // --- pdfplumber format (no tabs) ---
+    // Original regex-based parsing
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+      if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
+          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
+        inBelanja = true;
+        continue;
+      }
+      if (!inBelanja) continue;
 
-    // Skip header/subheader rows
-    if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
-    if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
-    if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
-    if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
+      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
+      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
+      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
+      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
 
-    // Try full pattern first (8 columns: noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah)
-    const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
-    if (fullMatch) {
-      belanjaRaw.push({
-        noUrut: fullMatch[1],
-        kodeRekening: fullMatch[2],
-        kodeProgram: fullMatch[3],
-        uraian: fullMatch[4].trim(),
-        volume: fullMatch[5],
-        satuan: fullMatch[6],
-        tarifHarga: fullMatch[7],
-        jumlah: fullMatch[8],
-      });
-      continue;
-    }
+      const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
+      if (fullMatch) {
+        belanjaRaw.push({
+          noUrut: fullMatch[1],
+          kodeRekening: fullMatch[2],
+          kodeProgram: fullMatch[3],
+          uraian: fullMatch[4].trim(),
+          volume: fullMatch[5],
+          satuan: fullMatch[6],
+          tarifHarga: fullMatch[7],
+          jumlah: fullMatch[8],
+        });
+        continue;
+      }
 
-    // Try simpler pattern (5 columns: noUrut, kodeRekening, kodeProgram, uraian, jumlah)
-    const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
-    if (simpleMatch) {
-      belanjaRaw.push({
-        noUrut: simpleMatch[1],
-        kodeRekening: simpleMatch[2],
-        kodeProgram: simpleMatch[3],
-        uraian: simpleMatch[4].trim(),
-        volume: '',
-        satuan: '',
-        tarifHarga: '',
-        jumlah: simpleMatch[5],
-      });
-      continue;
+      const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
+      if (simpleMatch) {
+        belanjaRaw.push({
+          noUrut: simpleMatch[1],
+          kodeRekening: simpleMatch[2],
+          kodeProgram: simpleMatch[3],
+          uraian: simpleMatch[4].trim(),
+          volume: '',
+          satuan: '',
+          tarifHarga: '',
+          jumlah: simpleMatch[5],
+        });
+        continue;
+      }
     }
   }
 
+  // Handle multi-line uraian for pdf-parse format
+  // Some items have uraian spanning multiple lines:
+  //   "08. \t 35. \n Pembelian Bahan Habis Pakai... \n administrasi sekolah) \n 11.906.000 \t 05. \t 06."
+  // We need to merge these continuation lines with the previous item
+  if (hasTabs) {
+    const merged: typeof belanjaRaw = [];
+    for (let i = 0; i < belanjaRaw.length; i++) {
+      const item = belanjaRaw[i];
+      // Check if this item has jumlah=0 and the next item has no noUrut pattern
+      // (continuation of uraian)
+      if (i > 0 && !item.kodeRekening && item.uraian && !reMatch(/^\d+/, item.noUrut)) {
+        // This might be a continuation - append uraian to previous
+        const prev = merged[merged.length - 1];
+        if (prev) {
+          prev.uraian += ' ' + item.uraian;
+          if (!prev.jumlah && item.jumlah) prev.jumlah = item.jumlah;
+          if (!prev.kodeRekening && item.kodeRekening) prev.kodeRekening = item.kodeRekening;
+          if (!prev.kodeProgram && item.kodeProgram) prev.kodeProgram = item.kodeProgram;
+          continue;
+        }
+      }
+      merged.push(item);
+    }
+    belanjaRaw.length = 0;
+    belanjaRaw.push(...merged);
+  }
+
   // --- Build RKASMonth from parsed data ---
-  // Parse belanja items - only keep leaf items (those with kodeRekening)
   const rawItems: RKASItem[] = belanjaRaw
     .filter(r => r.kodeRekening && r.kodeRekening.trim() !== '')
     .map(r => ({
@@ -340,7 +708,6 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     }
   }
 
-  // Also add any standar codes not in the predefined list
   for (const [code, items] of standarMap) {
     if (!orderedCodes.includes(code) && items.length > 0) {
       standarList.push({
@@ -658,6 +1025,10 @@ async function parseRKASFile(fileName: string, buffer?: Buffer): Promise<RKASMon
       const result = parseRKASFromText(fullText, fileName);
       if (!result) {
         console.error(`RKAS parse: parseRKASFromText returned null for ${fileName}`);
+      } else if (result.allItems.length === 0) {
+        console.warn(`RKAS parse: parsed ${fileName} but got 0 belanja items. Header: school=${result.namaSekolah}, npsn=${result.npsn}, penerimaan=${result.totalPenerimaan}, tipe=${result.tipe}`);
+      } else {
+        console.log(`RKAS parse: successfully parsed ${fileName} - ${result.allItems.length} items, tipe=${result.tipe}`);
       }
       return result;
     } catch (err: any) {
