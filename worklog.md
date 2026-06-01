@@ -106,3 +106,40 @@ Stage Summary:
 - Print functionality uses CSS @media print to show only document content
 - Rekapitulasi sub-tab preserved (removed upload-related elements only)
 - page.tsx reduced from ~2868 to ~2700 lines (less code, more functionality)
+
+---
+Task ID: 5
+Agent: full-stack-developer
+Task: Add Master Data tab with No Pesanan grouping
+
+Work Log:
+- Added Database and ChevronUp icon imports from lucide-react
+- Added new state variables: spjPesananMap (Record<string, string> for noBukti→noPesanan mapping), spjSelectedPesanan (string for doc filtering), masterDataCollapsed (Record<string, boolean> for collapsible groups)
+- Added 'master-data' sub-tab entry as FIRST position in SPJ sub-tab navigation array
+- Implemented Master Data sub-tab with:
+  - Period selector (Tahunan/Bulanan) matching other SPJ sub-tabs
+  - Summary cards: Total No. Bukti, Total Pengeluaran, Assigned/Unassigned groups
+  - BKU transactions grouped by noBukti with collapsible groups
+  - RKAS lookup map (compositeKey → uraian) for matching BKU items to RKAS descriptions
+  - Each group shows: No. Bukti header, Tanggal, transaction count, total amount
+  - Collapsible item table: No | Kode Rekening | Uraian (BKU) | Uraian (RKAS) | Jumlah
+  - No Pesanan input field per group (saved to spjPesananMap)
+  - Items with empty noBukti grouped under "Tanpa No. Bukti" (sorted last)
+  - Badge indicators for assigned/unassigned No Pesanan
+- Updated document generation condition to exclude 'master-data' sub-tab
+- Added No Pesanan selector at top of each document tab (5 doc types):
+  - Shows buttons for each unique No Pesanan value from spjPesananMap
+  - "Semua" button to show all items
+  - Selecting a No Pesanan auto-sets nomorSurat in spjDocFields
+- Replaced rkasProcurementItems logic:
+  - If spjSelectedPesanan is set, filters BKU transactions by matching noBukti in spjPesananMap
+  - Groups transactions by compositeKey and merges amounts
+  - Uses RKAS uraian for item names when available
+  - Falls back to original SPJ standarGroups logic when no pesanan is selected
+- Lint passes cleanly, dev server compiles without errors
+
+Stage Summary:
+- Master Data tab added as first SPJ sub-tab with No. Bukti grouping and No Pesanan assignment
+- 5 document generation tabs now have No Pesanan selector for filtering procurement items
+- Data flow: Master Data → assign No Pesanan to No. Bukti groups → select No Pesanan in doc tabs → filtered items appear in procurement tables
+- page.tsx grew from ~3147 to ~3400 lines

@@ -19,6 +19,7 @@ import {
   ChevronDown, ArrowUpRight, ArrowDownRight, Info,
   Receipt, FilePlus2, ArrowRight, Minus, Plus, Trash2, ClipboardList,
   Scale, Package, Store, FileCheck, ClipboardPaste, ShieldCheck, Printer,
+  Database, ChevronUp,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -192,6 +193,9 @@ export default function Home() {
     pemeriksa: '',
     nipPemeriksa: '',
   })
+  const [spjPesananMap, setSpjPesananMap] = useState<Record<string, string>>({})
+  const [spjSelectedPesanan, setSpjSelectedPesanan] = useState<string>('')
+  const [masterDataCollapsed, setMasterDataCollapsed] = useState<Record<string, boolean>>({})
   const [toastMessages, setToastMessages] = useState<{ id: number; message: string; type: 'info' | 'warning' | 'success' }[]>([])
   const bkuFileInputRef = useRef<HTMLInputElement>(null)
   const rkasFileInputRef = useRef<HTMLInputElement>(null)
@@ -1370,6 +1374,7 @@ export default function Home() {
                 {/* ===== Sub-Tab Navigation ===== */}
                 <div className="flex items-center gap-1 overflow-x-auto pb-1">
                   {[
+                    { key: 'master-data', label: 'Master Data', icon: Database },
                     { key: 'rekapitulasi', label: 'Rekapitulasi', icon: FileSpreadsheet },
                     { key: 'surat-pesanan', label: 'Surat Pesanan', icon: Package },
                     { key: 'surat-balasan', label: 'Surat Balasan Toko', icon: Store },
@@ -1389,6 +1394,243 @@ export default function Home() {
                     </Button>
                   ))}
                 </div>
+
+                {/* ===== MASTER DATA SUB-TAB ===== */}
+                {spjSubTab === 'master-data' && (() => {
+                  // Collect BKU transactions for the selected period
+                  const allTransactions = (() => {
+                    if (selectedSpjMonth === -1) {
+                      // Tahunan: all months
+                      return bkuMonths.flatMap(m => m.transactions)
+                    }
+                    // Specific month
+                    return bkuMonths[selectedSpjMonth]?.transactions || []
+                  })()
+
+                  // Filter only pengeluaran > 0
+                  const spendingTransactions = allTransactions.filter(t => t.pengeluaran > 0)
+
+                  // Build RKAS lookup map: compositeKey -> uraian
+                  const rkasLookup = new Map<string, string>()
+                  for (const rkasMonth of rkasMonths) {
+                    for (const item of rkasMonth.allItems) {
+                      const key = compositeKey(item.kodeProgram, item.kodeRekening)
+                      if (!rkasLookup.has(key)) {
+                        rkasLookup.set(key, item.uraian)
+                      }
+                    }
+                  }
+
+                  // Group by noBukti
+                  const grouped = new Map<string, BKUTransaction[]>()
+                  for (const t of spendingTransactions) {
+                    const key = t.noBukti?.trim() || '__TANPA_NO_BUKTI__'
+                    if (!grouped.has(key)) grouped.set(key, [])
+                    grouped.get(key)!.push(t)
+                  }
+
+                  // Sort groups: those with noBukti first, then "Tanpa No. Bukti" last
+                  const sortedGroupKeys = Array.from(grouped.keys()).sort((a, b) => {
+                    if (a === '__TANPA_NO_BUKTI__') return 1
+                    if (b === '__TANPA_NO_BUKTI__') return -1
+                    return a.localeCompare(b)
+                  })
+
+                  // Summary stats
+                  const totalGroups = grouped.size
+                  const totalPengeluaran = spendingTransactions.reduce((s, t) => s + t.pengeluaran, 0)
+                  const assignedGroups = sortedGroupKeys.filter(k => k !== '__TANPA_NO_BUKTI__' && spjPesananMap[k]?.trim()).length
+                  const unassignedGroups = totalGroups - assignedGroups
+
+                  return (
+                    <>
+                      {/* Period Selector */}
+                      <Card>
+                        <CardContent className="py-2.5 px-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] text-muted-foreground font-medium shrink-0">Periode:</span>
+                            <Button
+                              variant={selectedSpjMonth === -1 ? 'default' : 'outline'}
+                              size="sm" className="h-7 text-[11px] gap-1"
+                              onClick={() => setSelectedSpjMonth(-1)}
+                            >
+                              <Calendar className="h-3 w-3" /> Tahunan
+                            </Button>
+                            {bkuMonths.map((m, idx) => (
+                              <Button
+                                key={idx}
+                                variant={selectedSpjMonth === idx ? 'default' : 'outline'}
+                                size="sm" className="h-7 text-[11px] gap-1"
+                                onClick={() => setSelectedSpjMonth(idx)}
+                              >
+                                <Calendar className="h-3 w-3" /> {MONTH_NAMES[m.bulan?.toUpperCase()] || m.bulan?.slice(0,3)} {m.tahun}
+                              </Button>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Summary Card */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
+                          <CardContent className="pt-3 pb-2 px-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Database className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                              <p className="text-[10px] text-muted-foreground">Total No. Bukti</p>
+                            </div>
+                            <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{totalGroups}</p>
+                          </CardContent>
+                        </Card>
+                        <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
+                          <CardContent className="pt-3 pb-2 px-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Wallet className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                              <p className="text-[10px] text-muted-foreground">Total Pengeluaran</p>
+                            </div>
+                            <p className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(totalPengeluaran)}</p>
+                          </CardContent>
+                        </Card>
+                        <Card className="border-teal-200 dark:border-teal-800 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
+                          <CardContent className="pt-3 pb-2 px-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <CheckCircle2 className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+                              <p className="text-[10px] text-muted-foreground">Sudah Ada No Pesanan</p>
+                            </div>
+                            <p className="text-sm font-bold text-teal-700 dark:text-teal-300">{assignedGroups}</p>
+                          </CardContent>
+                        </Card>
+                        <Card className="border-rose-200 dark:border-rose-800 bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30">
+                          <CardContent className="pt-3 pb-2 px-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              <AlertCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
+                              <p className="text-[10px] text-muted-foreground">Belum Ada No Pesanan</p>
+                            </div>
+                            <p className="text-sm font-bold text-rose-700 dark:text-rose-300">{unassignedGroups}</p>
+                          </CardContent>
+                        </Card>
+                      </div>
+
+                      {/* Grouped Items */}
+                      {spendingTransactions.length === 0 ? (
+                        <Card className="border-dashed">
+                          <CardContent className="py-16 text-center space-y-3">
+                            <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center mx-auto">
+                              <Database className="h-8 w-8 text-muted-foreground" />
+                            </div>
+                            <div>
+                              <h3 className="text-sm font-semibold">Belum ada data pengeluaran</h3>
+                              <p className="text-xs text-muted-foreground mt-1">Import file BKU terlebih dahulu untuk melihat data Master Data</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ) : (
+                        <div className="space-y-3">
+                          {sortedGroupKeys.map(noBuktiKey => {
+                            const transactions = grouped.get(noBuktiKey)!
+                            const isTanpaBukti = noBuktiKey === '__TANPA_NO_BUKTI__'
+                            const displayKey = isTanpaBukti ? 'Tanpa No. Bukti' : noBuktiKey
+                            const groupTotal = transactions.reduce((s, t) => s + t.pengeluaran, 0)
+                            const isCollapsed = masterDataCollapsed[noBuktiKey] !== false // default expanded
+                            const hasPesanan = !isTanpaBukti && spjPesananMap[noBuktiKey]?.trim()
+
+                            return (
+                              <Card key={noBuktiKey} className={`overflow-hidden ${hasPesanan ? 'border-teal-200 dark:border-teal-800' : ''}`}>
+                                {/* Group Header - Clickable */}
+                                <div
+                                  className="px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                                  onClick={() => setMasterDataCollapsed(prev => ({ ...prev, [noBuktiKey]: prev[noBuktiKey] === false }))}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                      {isCollapsed ? (
+                                        <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                                      ) : (
+                                        <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
+                                      )}
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-xs font-semibold">{displayKey}</span>
+                                          {hasPesanan && (
+                                            <Badge variant="default" className="text-[9px] h-4 px-1.5 bg-teal-600">
+                                              {spjPesananMap[noBuktiKey]}
+                                            </Badge>
+                                          )}
+                                          {!isTanpaBukti && !hasPesanan && (
+                                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 text-amber-600 border-amber-300">
+                                              Belum ada pesanan
+                                            </Badge>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-3 mt-0.5">
+                                          <span className="text-[10px] text-muted-foreground">
+                                            {transactions[0]?.tanggal ? new Date(transactions[0].tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
+                                          </span>
+                                          <span className="text-[10px] text-muted-foreground">{transactions.length} transaksi</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <span className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(groupTotal)}</span>
+                                  </div>
+
+                                  {/* No Pesanan Input */}
+                                  {!isTanpaBukti && (
+                                    <div className="mt-2 flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                                      <label className="text-[10px] font-medium text-muted-foreground shrink-0">No Pesanan:</label>
+                                      <Input
+                                        className="h-6 text-[11px] max-w-[240px]"
+                                        value={spjPesananMap[noBuktiKey] || ''}
+                                        onChange={e => setSpjPesananMap(prev => ({ ...prev, [noBuktiKey]: e.target.value }))}
+                                        placeholder="contoh: 001/SP/SD/2024"
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Collapsible Items Table */}
+                                {!isCollapsed && (
+                                  <CardContent className="px-4 pb-3 pt-0">
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-[11px]">
+                                        <thead>
+                                          <tr className="border-b bg-muted/50">
+                                            <th className="px-2 py-1.5 text-center w-10">No</th>
+                                            <th className="px-2 py-1.5 text-left w-28">Kode Rekening</th>
+                                            <th className="px-2 py-1.5 text-left">Uraian (BKU)</th>
+                                            <th className="px-2 py-1.5 text-left">Uraian (RKAS)</th>
+                                            <th className="px-2 py-1.5 text-right w-28">Jumlah</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {transactions.map((t, idx) => {
+                                            const ck = compositeKey(t.kodeKegiatan, t.kodeRekening)
+                                            const rkasUraian = rkasLookup.get(ck) || '-'
+                                            return (
+                                              <tr key={idx} className="border-b last:border-0 hover:bg-muted/30">
+                                                <td className="px-2 py-1.5 text-center text-muted-foreground">{idx + 1}</td>
+                                                <td className="px-2 py-1.5 font-mono text-[10px]">{t.kodeRekening || '-'}</td>
+                                                <td className="px-2 py-1.5">{t.uraian || '-'}</td>
+                                                <td className="px-2 py-1.5 text-muted-foreground">{rkasUraian}</td>
+                                                <td className="px-2 py-1.5 text-right font-medium">{fmtRp(t.pengeluaran)}</td>
+                                              </tr>
+                                            )
+                                          })}
+                                          <tr className="bg-muted/50 font-semibold">
+                                            <td colSpan={4} className="px-2 py-1.5 text-right">Total</td>
+                                            <td className="px-2 py-1.5 text-right">{fmtRp(groupTotal)}</td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </CardContent>
+                                )}
+                              </Card>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
 
                 {/* ===== REKAPITULASI SUB-TAB ===== */}
                 {spjSubTab === 'rekapitulasi' && (
@@ -1774,7 +2016,7 @@ export default function Home() {
                 )}
 
                 {/* ===== GENERATED DOCUMENT SUB-TABS ===== */}
-                {spjSubTab !== 'rekapitulasi' && (() => {
+                {spjSubTab !== 'rekapitulasi' && spjSubTab !== 'master-data' && (() => {
                   const docType = spjSubTab as SPJDocType
                   const src = selectedSpjMonth === -1 ? spjData?.tahunan : spjData?.bulanan?.[selectedSpjMonth]
 
@@ -1820,8 +2062,62 @@ export default function Home() {
                   const config = docTypeConfig[docType]
                   const IconComp = config.icon
 
-                  // RKAS items for procurement table - get items with realisasi > 0
+                  // RKAS lookup map for matching BKU items
+                  const rkasLookup = new Map<string, string>()
+                  for (const rkasMonth of rkasMonths) {
+                    for (const item of rkasMonth.allItems) {
+                      const key = compositeKey(item.kodeProgram, item.kodeRekening)
+                      if (!rkasLookup.has(key)) {
+                        rkasLookup.set(key, item.uraian)
+                      }
+                    }
+                  }
+
+                  // Collect BKU transactions for the selected period
+                  const allBkuTransactions = (() => {
+                    if (selectedSpjMonth === -1) {
+                      return bkuMonths.flatMap(m => m.transactions)
+                    }
+                    return bkuMonths[selectedSpjMonth]?.transactions || []
+                  })()
+
+                  // Get unique No Pesanan values from spjPesananMap
+                  const uniquePesananValues = Array.from(new Set(Object.values(spjPesananMap).filter(v => v.trim())))
+
+                  // RKAS items for procurement table - now filtered by selected No Pesanan
                   const rkasProcurementItems = (() => {
+                    // If a No Pesanan is selected, filter BKU transactions by spjPesananMap
+                    if (spjSelectedPesanan) {
+                      const matchingNoBuktis = Object.entries(spjPesananMap)
+                        .filter(([_, pesanan]) => pesanan === spjSelectedPesanan)
+                        .map(([noBukti]) => noBukti)
+
+                      const matchingTransactions = allBkuTransactions
+                        .filter(t => t.pengeluaran > 0 && matchingNoBuktis.includes(t.noBukti?.trim() || ''))
+
+                      // Group by compositeKey to merge similar items
+                      const mergedMap = new Map<string, { nama: string; namaRkas: string; jumlah: number }>()
+                      for (const t of matchingTransactions) {
+                        const ck = compositeKey(t.kodeKegiatan, t.kodeRekening)
+                        const rkasUraian = rkasLookup.get(ck) || t.uraian
+                        if (mergedMap.has(ck)) {
+                          mergedMap.get(ck)!.jumlah += t.pengeluaran
+                        } else {
+                          mergedMap.set(ck, { nama: t.uraian, namaRkas: rkasUraian, jumlah: t.pengeluaran })
+                        }
+                      }
+                      let no = 1
+                      return Array.from(mergedMap.entries()).map(([_, v]) => ({
+                        no: no++,
+                        nama: v.namaRkas !== '-' ? v.namaRkas : v.nama,
+                        volume: '1',
+                        satuan: 'Paket',
+                        hargaSatuan: v.jumlah,
+                        jumlah: v.jumlah,
+                      }))
+                    }
+
+                    // Fallback: if no pesanan selected, use the old logic from SPJ standarGroups
                     if (!src) return []
                     const items: { no: number; nama: string; volume: string; satuan: string; hargaSatuan: number; jumlah: number }[] = []
                     let no = 1
@@ -1846,6 +2142,37 @@ export default function Home() {
 
                   return (
                     <>
+                      {/* No Pesanan Selector */}
+                      {uniquePesananValues.length > 0 && (
+                        <Card>
+                          <CardContent className="py-2.5 px-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[10px] text-muted-foreground font-medium shrink-0">No Pesanan:</span>
+                              <Button
+                                variant={spjSelectedPesanan === '' ? 'default' : 'outline'}
+                                size="sm" className="h-7 text-[11px] gap-1"
+                                onClick={() => setSpjSelectedPesanan('')}
+                              >
+                                Semua
+                              </Button>
+                              {uniquePesananValues.map(pesanan => (
+                                <Button
+                                  key={pesanan}
+                                  variant={spjSelectedPesanan === pesanan ? 'default' : 'outline'}
+                                  size="sm" className="h-7 text-[11px] gap-1"
+                                  onClick={() => {
+                                    setSpjSelectedPesanan(pesanan)
+                                    setSpjDocFields(prev => ({ ...prev, nomorSurat: pesanan }))
+                                  }}
+                                >
+                                  <Receipt className="h-3 w-3" /> {pesanan}
+                                </Button>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
+
                       {/* Header Card */}
                       <Card className={`${config.borderClass} ${config.bgClass}`}>
                         <CardContent className="py-3 px-4">
