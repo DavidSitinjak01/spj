@@ -157,6 +157,7 @@ export default function Home() {
   useEffect(() => { setImageLoaded(false) }, [currentPage])
 
   const loadAvailablePDF = async () => {
+    setError(null) // Always clear stale errors on mount
     setLoading(true)
     try {
       // First check what PDFs are available
@@ -164,9 +165,13 @@ export default function Home() {
       if (listRes.ok) {
         const listData = await listRes.json()
         const files: string[] = listData.files || []
-        if (files.length > 0) {
-          // Load the first available PDF
-          await loadPDF(files[0], true)
+        // Filter out BKU/RKAS/BKU Pajak files - those are handled by their own tabs
+        const generalPdfs = files.filter(f => {
+          const lower = f.toLowerCase()
+          return !lower.includes('bku') && !lower.includes('rkas') && !lower.includes('rapbs')
+        })
+        if (generalPdfs.length > 0) {
+          await loadPDF(generalPdfs[0], true)
         }
       }
     } catch {
@@ -177,15 +182,17 @@ export default function Home() {
   }
 
   const loadPDF = async (fileName: string, skipError = false) => {
-    setLoading(true); if (!skipError) setError(null)
+    setLoading(true); setError(null)
     try {
       const res = await fetch(`/api/pdf/info?file=${encodeURIComponent(fileName)}`)
       if (res.status === 404) {
-        // File not found - this is not an error if we're just checking
         if (!skipError) setError('File PDF tidak ditemukan')
         return
       }
-      if (!res.ok) throw new Error('Gagal memuat PDF')
+      if (!res.ok) {
+        if (skipError) return // Don't throw on auto-load failures
+        throw new Error('Gagal memuat PDF')
+      }
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100)
       generateSummary(fileName)

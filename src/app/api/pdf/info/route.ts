@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { processPDF, renderPDFPages, getPDFFiles } from '@/lib/pdf-processor';
+import fs from 'fs';
+import path from 'path';
+
+const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 
 export async function GET(request: Request) {
   try {
@@ -12,6 +16,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ files });
     }
 
+    // Check file existence first before processing
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    if (!fs.existsSync(filePath)) {
+      return NextResponse.json(
+        { error: 'PDF file not found', notFound: true },
+        { status: 404 }
+      );
+    }
+
     const info = processPDF(fileName);
     const pageImages = renderPDFPages(fileName);
 
@@ -22,8 +35,9 @@ export async function GET(request: Request) {
       extractedText: info.extractedText,
     });
   } catch (error: any) {
-    // If file not found, return 404 instead of 500 so the client can handle gracefully
-    if (error.message?.includes('not found')) {
+    // If file not found or any related error, return 404
+    const msg = (error.message || '').toLowerCase();
+    if (msg.includes('not found') || msg.includes('enoent') || msg.includes('no such file')) {
       return NextResponse.json(
         { error: 'PDF file not found', notFound: true },
         { status: 404 }
