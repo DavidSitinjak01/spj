@@ -3922,8 +3922,6 @@ export default function Home() {
                                   {/* ===== F. KUITANSI PEMBAYARAN ===== */}
                                   {currentDocType === 'kuitansi-pembayaran' && (
                                     <div>
-                                      {kopSurat}
-
                                       {/* Info Header 2 Kolom */}
                                       <table className="w-full text-[10pt] mb-2" style={{ lineHeight: '1.4' }}>
                                         <tbody>
@@ -3942,10 +3940,8 @@ export default function Home() {
                                         </tbody>
                                       </table>
 
-                                      {/* Judul TANDA PEMBAYARAN */}
                                       <p className="font-bold text-center text-[12pt] mb-2">TANDA PEMBAYARAN</p>
 
-                                      {/* Isi Kuitansi */}
                                       <div className="text-[10pt]" style={{ lineHeight: '1.6' }}>
                                         <table className="w-full">
                                           <tbody>
@@ -3973,10 +3969,8 @@ export default function Home() {
                                         </table>
                                       </div>
 
-                                      {/* Tanda Tangan 4 Blok */}
                                       <div className="mt-6 text-[10pt]">
                                         <div className="flex justify-between">
-                                          {/* Mengetahui */}
                                           <div className="text-center" style={{ width: '30%' }}>
                                             <p className="font-bold">Mengetahui :</p>
                                             <p>Pengurus Barang</p>
@@ -3985,7 +3979,6 @@ export default function Home() {
                                             <p>Penata Muda</p>
                                             {sekolahData.nipPengurus && <p>NIP. {sekolahData.nipPengurus}</p>}
                                           </div>
-                                          {/* Lunas Bayar Oleh */}
                                           <div className="text-center" style={{ width: '30%' }}>
                                             <p className="font-bold">Lunas Bayar Oleh :</p>
                                             <p>Bendahara {sekolahData.namaSekolah || '........................'}</p>
@@ -3994,7 +3987,6 @@ export default function Home() {
                                             <p>Penata TK. I</p>
                                             {sekolahData.nipBendahara && <p>NIP. {sekolahData.nipBendahara}</p>}
                                           </div>
-                                          {/* Diterima oleh */}
                                           <div className="text-center" style={{ width: '30%' }}>
                                             <p className="font-bold">Diterima oleh :</p>
                                             <p>{toko?.namaToko || '........................'}</p>
@@ -4004,7 +3996,6 @@ export default function Home() {
                                           </div>
                                         </div>
 
-                                        {/* Menyetujui - center bottom */}
                                         <div className="text-center mt-4">
                                           <p className="font-bold">Menyetujui :</p>
                                           <p>Kepala Sekolah {sekolahData.namaSekolah || '........................'}</p>
