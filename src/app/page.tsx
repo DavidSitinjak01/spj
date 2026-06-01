@@ -128,6 +128,22 @@ interface BudgetData {
 const fmt = (n: number) => new Intl.NumberFormat('id-ID').format(n)
 const fmtRp = (n: number) => `Rp ${fmt(n)}`
 
+// --- Terbilang helper (convert number to Indonesian words) ---
+const terbilang = (n: number): string => {
+  if (n === 0) return 'Nol'
+  const satuan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas']
+  if (n < 12) return satuan[n]
+  if (n < 20) return terbilang(n - 10) + ' Belas'
+  if (n < 100) return terbilang(Math.floor(n / 10)) + ' Puluh' + (n % 10 ? ' ' + terbilang(n % 10) : '')
+  if (n < 200) return 'Seratus' + (n % 100 ? ' ' + terbilang(n % 100) : '')
+  if (n < 1000) return terbilang(Math.floor(n / 100)) + ' Ratus' + (n % 100 ? ' ' + terbilang(n % 100) : '')
+  if (n < 2000) return 'Seribu' + (n % 1000 ? ' ' + terbilang(n % 1000) : '')
+  if (n < 1000000) return terbilang(Math.floor(n / 1000)) + ' Ribu' + (n % 1000 ? ' ' + terbilang(n % 1000) : '')
+  if (n < 1000000000) return terbilang(Math.floor(n / 1000000)) + ' Juta' + (n % 1000000 ? ' ' + terbilang(n % 1000000) : '')
+  if (n < 1000000000000) return terbilang(Math.floor(n / 1000000000)) + ' Miliar' + (n % 1000000000 ? ' ' + terbilang(n % 1000000000) : '')
+  return terbilang(Math.floor(n / 1000000000000)) + ' Triliun' + (n % 1000000000000 ? ' ' + terbilang(n % 1000000000000) : '')
+}
+
 const normalizeKode = (kode: string): string => kode.replace(/[\s\n\r]/g, '').replace(/\.+$/, '').trim()
 const compositeKey = (kodeProgram: string, kodeRekening: string): string =>
   `${normalizeKode(kodeProgram)}|${normalizeKode(kodeRekening)}`
@@ -3393,39 +3409,75 @@ export default function Home() {
                                   {currentDocType === 'surat-pesanan' && (
                                     <div>
                                       {kopSurat}
-                                      <div className="text-right mb-4">
-                                        <p>Nomor: {selectedRecord.nomorSuratPesanan || '............'}</p>
-                                        <p>Lampiran: -</p>
-                                        <p>Perihal: Pesanan Barang/Jasa</p>
+
+                                      {/* Info Sekolah di bawah KOP */}
+                                      <div className="text-center text-[9pt]" style={{ lineHeight: '1.3' }}>
+                                        <p>NIS : {sekolahData.npsn ? '300010' : '..........'} NPSN : {sekolahData.npsn || '..........'} Terakreditasi A NSS: {sekolahData.npsn ? '301071701001' : '..........'}</p>
+                                        <p>{sekolahData.alamat || '.......................................................................................'}</p>
+                                        <p>Telp/HP: ....................; Kode Pos: ............</p>
+                                        <p>Email: ................................; website: ................................</p>
                                       </div>
-                                      <p className="mb-1">Kepada Yth.</p>
-                                      <p className="font-bold">{toko?.namaToko || '[Nama Toko/Supplier]'}</p>
-                                      <p className="mb-4">{toko?.alamat || '[Alamat Toko]'}</p>
-                                      <p>Dengan hormat,</p>
-                                      <p className="text-justify mb-4">
-                                        Sehubungan dengan pelaksanaan program kerja sekolah tahun anggaran {tahunAnggaran},
-                                        bersama ini kami memesan barang/jasa sebagai berikut:
-                                      </p>
-                                      <table className="w-full border-collapse border border-black mb-4">
+
+                                      {/* Judul SURAT PESANAN */}
+                                      <div className="text-center mt-2 mb-1">
+                                        <p className="font-bold text-[13pt]">SURAT PESANAN</p>
+                                        <p className="text-[11pt]">Nomor: {selectedRecord?.nomorSuratPesanan || '............'}</p>
+                                      </div>
+
+                                      {/* Tabel Info 2 Kolom */}
+                                      <table className="w-full border-collapse border border-black text-[10pt] mb-0">
+                                        <tbody>
+                                          <tr>
+                                            <td className="border border-black px-2 py-0.5" style={{ width: '50%' }}>
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td className="py-0.5">Paket Pesanan :</td></tr>
+                                                  <tr><td className="py-0.5">Kegiatan jual beli dengan mitra {toko?.namaToko || '........................'}</td></tr>
+                                                  <tr><td className="py-0.5">Waktu Pengerjaan Pesanan : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                  <tr><td className="py-0.5">Waktu Pemrosesan Pesanan : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                  <tr><td className="py-0.5">Waktu Penyelesaian Pesanan : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
+                                            <td className="border border-black px-2 py-0.5" style={{ width: '50%' }}>
+                                              <table className="w-full text-[10pt]">
+                                                <tbody>
+                                                  <tr><td className="py-0.5">Nomor Surat Pesanan : {selectedRecord?.nomorSuratPesanan || '............'}</td></tr>
+                                                  <tr><td className="py-0.5">Tanggal Pesanan : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td></tr>
+                                                  <tr><td className="py-0.5">Tanggal Negosiasi : </td></tr>
+                                                  <tr><td className="py-0.5">No. BPU : {selectedRecord?.noBukti || '............'}</td></tr>
+                                                  <tr><td className="py-0.5">Catatan Pengiriman Untuk Penyedia : </td></tr>
+                                                </tbody>
+                                              </table>
+                                            </td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+
+                                      {/* RINCIAN PEKERJAAN */}
+                                      <table className="w-full border-collapse border border-black text-[10pt]">
                                         <thead>
-                                          <tr className="bg-gray-100">
-                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                            <th className="border border-black px-2 py-1 text-left">Uraian</th>
+                                          <tr>
+                                            <th colSpan={6} className="border border-black px-2 py-1 text-center font-bold text-[11pt]">RINCIAN PEKERJAAN</th>
+                                          </tr>
+                                          <tr>
+                                            <th className="border border-black px-2 py-1 text-center w-8">No</th>
+                                            <th className="border border-black px-2 py-1 text-left">Uraian Barang / Jasa</th>
                                             <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
-                                            <th className="border border-black px-2 py-1 text-center w-16">Satuan</th>
+                                            <th className="border border-black px-2 py-1 text-center w-20">Satuan Ukuran</th>
                                             <th className="border border-black px-2 py-1 text-right w-28">Harga Satuan</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Total</th>
+                                            <th className="border border-black px-2 py-1 text-right w-28">Total Harga</th>
                                           </tr>
                                         </thead>
                                         <tbody>
                                           {items.map((item: any, idx: number) => (
                                             <tr key={idx}>
-                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
-                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.volume || '1'}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.satuan || 'Paket'}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{item.tarifHarga ? fmtRp(item.tarifHarga) : fmtRp(item.jumlah || 0)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.jumlah || 0)}</td>
+                                              <td className="border border-black px-2 py-0.5 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-0.5">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-0.5 text-center">{item.volume || '1'}</td>
+                                              <td className="border border-black px-2 py-0.5 text-center">{item.satuan || 'Paket'}</td>
+                                              <td className="border border-black px-2 py-0.5 text-right">{item.tarifHarga ? fmtRp(item.tarifHarga) : fmtRp(item.jumlah || 0)}</td>
+                                              <td className="border border-black px-2 py-0.5 text-right">{fmtRp(item.jumlah || 0)}</td>
                                             </tr>
                                           ))}
                                           {items.length === 0 && (
@@ -3433,35 +3485,135 @@ export default function Home() {
                                               <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
                                             </tr>
                                           )}
+                                          {/* Harga sebelum PPN */}
+                                          <tr>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right font-bold">Harga sebelum PPN</td>
+                                            <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah)}</td>
+                                          </tr>
+                                          {/* DPP PPN */}
+                                          <tr>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">DPP PPN</td>
+                                            <td className="border border-black px-2 py-0.5 text-right">{fmtRp(Math.round(totalJumlah / 1.11))}</td>
+                                          </tr>
+                                          {/* PPN 11% */}
+                                          <tr>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">PPN 11%</td>
+                                            <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah - Math.round(totalJumlah / 1.11))}</td>
+                                          </tr>
+                                          {/* Total Pembayaran */}
                                           <tr className="font-bold">
-                                            <td colSpan={5} className="border border-black px-2 py-1 text-right">JUMLAH</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(totalJumlah)}</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">Total Pembayaran</td>
+                                            <td className="border border-black px-2 py-0.5 text-right">{fmtRp(totalJumlah)}</td>
+                                          </tr>
+                                          {/* PPh 23 2% */}
+                                          <tr>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-right">PPh 23 2%</td>
+                                            <td className="border border-black px-2 py-0.5 text-right">-</td>
+                                          </tr>
+                                          {/* Terbilang */}
+                                          <tr>
+                                            <td className="border border-black px-2 py-0.5 text-center italic" style={{ width: '20%' }}>Terbilang</td>
+                                            <td colSpan={5} className="border border-black px-2 py-0.5 text-center italic">
+                                              {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}
+                                            </td>
                                           </tr>
                                         </tbody>
                                       </table>
-                                      <p className="text-justify mb-8">
-                                        Demikian surat pesanan ini kami sampaikan, atas terlaksananya pesanan ini kami ucapkan terima kasih.
-                                      </p>
-                                      <div className="text-right mb-2">
-                                        <p>{formatTanggalShort(tglPesan)}</p>
+
+                                      {/* SYARAT-SYARAT */}
+                                      <div className="mt-3 text-[10pt]">
+                                        <p className="font-bold mb-1">Instruksi ke Penyedia dan Satuan Pendidikan :</p>
+                                        <ol className="list-decimal pl-5 space-y-0.5 text-justify" style={{ lineHeight: '1.4' }}>
+                                          <li>Penyedia berkewajiban untuk menyediakan barang/jasa sesuai dengan surat pesanan dan dalam jangka waktu transaksi yang berlaku.</li>
+                                          <li>Penyedia berhak meminta pembayaran sesuai total pembayaran setelah penyelesaian pekerjaan yang dimintakan pada Surat Pesanan ini dan dibuktikan dengan Berita Acara Serah Terima.</li>
+                                          <li>Pelaksana dalam kapasitas mewakili Satuan Pendidikan berhak untuk mendapatkan barang atau jasa sesuai Surat Pesanan ini.</li>
+                                          <li>Pelaksana berhak menolak barang/jasa yang tidak sesuai dengan surat pesanan.</li>
+                                          <li>Pelaksana dalam kapasitas mewakili Satuan Pendidikan berkewajiban untuk menyelesaikan pembayaran sesuai dengan mekanisme pembayaran yang berlaku pada sistem.</li>
+                                          <li>Segala perselisihan yang timbul dari Surat Pesanan ini diselesaikan antara para pihak sesuai ketentuan yang berlaku.</li>
+                                        </ol>
                                       </div>
-                                      <div className="flex justify-around mt-4">
-                                        <div className="text-center w-36">
-                                          <p className="text-[10px]">Penyedia,</p>
+
+                                      {/* Tanggal & Tanda Tangan */}
+                                      <div className="flex justify-between mt-4 text-[10pt]">
+                                        <div className="text-center w-40">
+                                          <p className="font-bold">{toko?.namaToko || '........................'}</p>
+                                          <p>Penyedia,</p>
                                           <div className="h-16" />
-                                          <p className="text-[11px] font-bold underline">{toko?.direktur || '........................'}</p>
+                                          <p className="font-bold underline">{toko?.direktur || '........................'}</p>
+                                          <p>Direktur</p>
                                         </div>
-                                        <div className="text-center w-36">
-                                          <p className="text-[10px]">Pengurus Barang,</p>
+                                        <div className="text-right">
+                                          <p>Telukdalam, {tglPesan ? formatTanggalShort(tglPesan) : '............'}</p>
+                                          <p className="mt-1">Pelaksana,</p>
                                           <div className="h-16" />
-                                          <p className="text-[11px] font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
-                                          {sekolahData.nipPengurus && <p className="text-[9px]">NIP. {sekolahData.nipPengurus}</p>}
+                                          <p className="font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          <p>Pembina Tk I</p>
+                                          {sekolahData.nipKepala && <p>NIP. {sekolahData.nipKepala}</p>}
                                         </div>
-                                        <div className="text-center w-36">
-                                          <p className="text-[10px]">Kepala Sekolah,</p>
+                                      </div>
+
+                                      {/* TANDA PEMBAYARAN */}
+                                      <div className="mt-6 border-t border-black pt-3">
+                                        <table className="w-full text-[10pt] mb-2">
+                                          <tbody>
+                                            <tr>
+                                              <td className="py-0.5">Sumber Anggaran : Dana BOSP {tahunAnggaran}</td>
+                                              <td className="py-0.5">Program : 06.05</td>
+                                            </tr>
+                                            <tr>
+                                              <td className="py-0.5">Kas/Pos Tanggal : {tglPesan ? formatTanggalShort(tglPesan) : '............'}</td>
+                                              <td className="py-0.5">Kegiatan : 06.05.08.</td>
+                                            </tr>
+                                            <tr>
+                                              <td className="py-0.5">Nomor : {selectedRecord?.noBukti || '............'}</td>
+                                              <td className="py-0.5">Kode Rek : 5.1.02.01.01.0024</td>
+                                            </tr>
+                                          </tbody>
+                                        </table>
+
+                                        <p className="font-bold text-center text-[11pt] mb-2">TANDA PEMBAYARAN</p>
+
+                                        <div className="text-[10pt]" style={{ lineHeight: '1.5' }}>
+                                          <p>Sudah terima dari : Bendahara {sekolahData.namaSekolah || '........................'}</p>
+                                          <p>Uang sebesar : Rp {totalJumlah > 0 ? fmt(totalJumlah) : '............'}</p>
+                                          <p>Terbilang : {totalJumlah > 0 ? terbilang(totalJumlah) + ' Rupiah' : '........................................................'}</p>
+                                          <p>Nomor Surat persetujuan penyediaan barang dan jasa : {selectedRecord?.nomorSuratPesanan || '............'}</p>
+                                          <p>Untuk pembayaran : Pengadaan Alat Tulis Kantor (ATK)</p>
+                                        </div>
+
+                                        <div className="flex justify-between mt-4 text-[10pt]">
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Mengetahui :</p>
+                                            <p>Pengurus Barang</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                            <p>Penata Muda</p>
+                                            {sekolahData.nipPengurus && <p>NIP. {sekolahData.nipPengurus}</p>}
+                                          </div>
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Lunas Bayar Oleh :</p>
+                                            <p>Bendahara {sekolahData.namaSekolah || '........................'}</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{sekolahData.bendahara || '........................'}</p>
+                                            <p>Penata TK. I</p>
+                                            {sekolahData.nipBendahara && <p>NIP. {sekolahData.nipBendahara}</p>}
+                                          </div>
+                                          <div className="text-center w-1/3">
+                                            <p className="font-bold">Diterima oleh :</p>
+                                            <p>{toko?.namaToko || '........................'}</p>
+                                            <div className="h-16" />
+                                            <p className="font-bold underline">{toko?.direktur || '........................'}</p>
+                                            <p>Direktur</p>
+                                          </div>
+                                        </div>
+
+                                        <div className="text-center mt-4 text-[10pt]">
+                                          <p className="font-bold">Menyetujui :</p>
+                                          <p>Kepala Sekolah {sekolahData.namaSekolah || '........................'}</p>
                                           <div className="h-16" />
-                                          <p className="text-[11px] font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
-                                          {sekolahData.nipKepala && <p className="text-[9px]">NIP. {sekolahData.nipKepala}</p>}
+                                          <p className="font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          <p>Pembina Tk I</p>
+                                          {sekolahData.nipKepala && <p>NIP. {sekolahData.nipKepala}</p>}
                                         </div>
                                       </div>
                                     </div>
@@ -3472,7 +3624,7 @@ export default function Home() {
                                     <div>
                                       {kopSurat}
                                       <h2 className="text-center font-bold text-[13pt] mb-1">DOKUMEN HASIL PEMBANDING HARGA</h2>
-                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratPesanan || '............'}</p>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord?.nomorSuratPesanan || '............'}</p>
                                       <table className="w-full border-collapse border border-black mb-4">
                                         <thead>
                                           <tr className="bg-gray-100">
@@ -3600,7 +3752,7 @@ export default function Home() {
                                     <div>
                                       {kopSurat}
                                       <h2 className="text-center font-bold text-[13pt] mb-1">SURAT HASIL PEMERIKSAAN BARANG/JASA</h2>
-                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratSHP || '............'}</p>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord?.nomorSuratSHP || '............'}</p>
 
                                       <p className="mb-2">
                                         Pada hari {formatTanggalIndo(tglPesan)}, kami yang bertanda tangan di bawah ini:
@@ -3685,7 +3837,7 @@ export default function Home() {
                                     <div>
                                       {kopSurat}
                                       <h2 className="text-center font-bold text-[13pt] mb-1">BERITA ACARA SERAH TERIMA BARANG/JASA</h2>
-                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratBAST || '............'}</p>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord?.nomorSuratBAST || '............'}</p>
 
                                       <p className="mb-2">
                                         Pada hari {formatTanggalIndo(tglPesan)}, yang bertanda tangan di bawah ini:

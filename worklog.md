@@ -113,3 +113,32 @@ Stage Summary:
 - 1-logo layout is now proportional (logo + centered text, not empty space on other side)
 - Both KOP preview and document print rendering use dynamic garis and layout
 - Fields persisted in database via sekolahData save
+
+---
+Task ID: 5
+Agent: main
+Task: Rebuild Surat Pesanan print format to match PDF exactly
+
+Work Log:
+- Analyzed PDF "45 Pesan.pdf" using VLM across all 4 pages
+- Identified exact layout structure: KOP → School info → SURAT PESANAN title → Nomor surat → 2-column info table → RINCIAN PEKERJAAN table → Tax rows (Harga sebelum PPN, DPP PPN, PPN 11%, Total Pembayaran, PPh 23 2%, Terbilang) → Syarat-syarat → Signatures → TANDA PEMBAYARAN section
+- Added `terbilang()` helper function (number to Indonesian words converter) as global constant
+- Completely rewrote Surat Pesanan document print format to match PDF:
+  1. KOP Sekolah (using dynamic kopSurat component with garis bawah)
+  2. School identity section (NIS, NPSN, Akreditasi, NSS, Alamat, Telp, Email, Website) - centered
+  3. "SURAT PESANAN" title + Nomor surat - centered
+  4. 2-column info table with border (Paket Pesanan, Kegiatan, Waktu Pengerjaan/Pemrosesan/Penyelesaian | Nomor Surat, Tanggal, No BPU, Catatan)
+  5. RINCIAN PEKERJAAN bordered table with columns: No, Uraian Barang/Jasa, Jumlah, Satuan Ukuran, Harga Satuan, Total Harga
+  6. Tax calculation rows: Harga sebelum PPN, DPP PPN, PPN 11%, Total Pembayaran, PPh 23 2%, Terbilang
+  7. Syarat-syarat section (6 numbered items)
+  8. Signature block: Penyedia (left) + Pelaksana/Kepala (right)
+  9. TANDA PEMBAYARAN section with: Sumber Anggaran/Program/Kegiatan/Kode Rek info, Tanda Pembayaran title, receipt details, 3-column signatures (Mengetahui/Lunas Bayar/Diterima) + Menyetujui (Kepala Sekolah)
+- Added optional chaining to selectedRecord references for safety
+- Verified lint passes and dev server running without errors
+
+Stage Summary:
+- Surat Pesanan format now matches PDF exactly with all 4 pages of content
+- Added terbilang() function for Indonesian number-to-words conversion
+- Tax calculation (PPN 11%, PPh 23 2%) included in document
+- TANDA PEMBAYARAN (payment receipt) section added as separate section
+- All signatures match PDF: Penyedia, Pelaksana, Pengurus Barang, Bendahara, Kepala Sekolah
