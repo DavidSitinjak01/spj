@@ -17,6 +17,7 @@ import {
   PieChart, BarChart3, Users, ShoppingBag, Landmark, Calendar, Building2,
   Search, TrendingUp, Wallet, GraduationCap, Wrench, Monitor, FileSpreadsheet,
   ChevronDown, ArrowUpRight, ArrowDownRight, Info,
+  Receipt, FilePlus2, ArrowRight, Minus, Plus, FolderOpen, Trash2,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -28,6 +29,17 @@ interface PDFPage { page: number; text: string }
 interface PDFData { fileName: string; pageCount: number; pageImages: string[]; extractedText: PDFPage[] }
 interface Summary { title: string; type: string; summary: string; keyPoints: string[]; totalAmount: string; entity: string; period: string }
 interface ChatMessage { role: 'user' | 'assistant'; content: string }
+
+interface BKUTransaction {
+  tanggal: string; kodeKegiatan: string; kodeRekening: string; noBukti: string;
+  uraian: string; penerimaan: number; pengeluaran: number; saldo: number;
+}
+interface BKUMonth {
+  fileName: string; bulan: string; tahun: string; sumberDana: string;
+  namaSekolah: string; npsn: string; transactions: BKUTransaction[];
+  totalPenerimaan: number; totalPengeluaran: number; saldoAkhir: number;
+  saldoAkhirBank: number; saldoAkhirTunai: number; tanggalTutup: string;
+}
 
 interface BudgetData {
   profil: { namaSekolah: string; npsn: string; alamat: string; kabupaten: string; provinsi: string; tahunAnggaran: string; kepalaSekolah: string; bendahara: string; komiteSekolah: string }
@@ -76,10 +88,16 @@ export default function Home() {
   const [pageInputValue, setPageInputValue] = useState('1')
   const [imageLoaded, setImageLoaded] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [bkuMonths, setBkuMonths] = useState<BKUMonth[]>([])
+  const [bkuLoading, setBkuLoading] = useState(false)
+  const [bkuUploading, setBkuUploading] = useState(false)
+  const [selectedBkuMonth, setSelectedBkuMonth] = useState<number>(0)
+  const [bkuSearchTerm, setBkuSearchTerm] = useState('')
+  const bkuFileInputRef = useRef<HTMLInputElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadPDF('rapbs-all-output.pdf') }, [])
+  useEffect(() => { loadPDF('rapbs-all-output.pdf'); loadBKU() }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
@@ -142,6 +160,26 @@ export default function Home() {
       setChatMessages(prev => [...prev, { role: 'assistant', content: data.answer }])
     } catch { setChatMessages(prev => [...prev, { role: 'assistant', content: 'Maaf, terjadi kesalahan.' }]) }
     finally { setChatLoading(false) }
+  }
+
+  const loadBKU = async () => {
+    setBkuLoading(true)
+    try {
+      const res = await fetch('/api/pdf/bku')
+      if (res.ok) { const data = await res.json(); setBkuMonths(data.months || []) }
+    } catch {} finally { setBkuLoading(false) }
+  }
+
+  const handleBKUUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files; if (!files || files.length === 0) return
+    setBkuUploading(true)
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const formData = new FormData(); formData.append('file', files[i])
+        await fetch('/api/pdf/bku', { method: 'POST', body: formData })
+      }
+      await loadBKU()
+    } catch {} finally { setBkuUploading(false); if (bkuFileInputRef.current) bkuFileInputRef.current.value = '' }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } }
@@ -233,6 +271,7 @@ export default function Home() {
                 <TabsTrigger value="alokasi" className="text-xs gap-1 px-2.5"><BarChart3 className="h-3 w-3" />Alokasi</TabsTrigger>
                 <TabsTrigger value="pengadaan" className="text-xs gap-1 px-2.5"><ShoppingBag className="h-3 w-3" />Pengadaan</TabsTrigger>
                 <TabsTrigger value="pegawai" className="text-xs gap-1 px-2.5"><Users className="h-3 w-3" />Pegawai</TabsTrigger>
+                <TabsTrigger value="bku" className="text-xs gap-1 px-2.5"><Receipt className="h-3 w-3" />BKU</TabsTrigger>
                 <TabsTrigger value="viewer" className="text-xs gap-1 px-2.5"><FileText className="h-3 w-3" />Dokumen</TabsTrigger>
                 <TabsTrigger value="summary" className="text-xs gap-1 px-2.5"><Sparkles className="h-3 w-3" />Ringkasan</TabsTrigger>
               </TabsList>
@@ -486,6 +525,187 @@ export default function Home() {
                     </div>
                   </>
                 ) : budgetLoading ? <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-14 rounded-lg" />)}</div> : <div className="text-center py-12 text-muted-foreground text-sm">Data belum tersedia</div>}
+              </div>
+            </TabsContent>
+
+            {/* === BKU TAB === */}
+            <TabsContent value="bku" className="flex-1 m-0 min-h-0 overflow-auto">
+              <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
+                {/* Upload area */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input type="file" ref={bkuFileInputRef} onChange={handleBKUUpload} accept=".pdf" multiple className="hidden" />
+                  <Button variant="outline" size="sm" onClick={() => bkuFileInputRef.current?.click()} disabled={bkuUploading} className="gap-2">
+                    {bkuUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FilePlus2 className="h-3.5 w-3.5" />}
+                    {bkuUploading ? 'Mengimpor...' : 'Import BKU'}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">{bkuMonths.length} bulan BKU terimpor</span>
+                  {bkuLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                </div>
+
+                {bkuMonths.length === 0 ? (
+                  <Card className="border-dashed">
+                    <CardContent className="py-12 text-center space-y-3">
+                      <div className="h-14 w-14 rounded-2xl bg-muted flex items-center justify-center mx-auto">
+                        <Receipt className="h-7 w-7 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-semibold">Belum ada data BKU</h3>
+                        <p className="text-xs text-muted-foreground mt-1">Import file PDF BKU per bulan untuk melihat tabel belanja bulanan</p>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => bkuFileInputRef.current?.click()} className="gap-2">
+                        <Upload className="h-3.5 w-3.5" /> Import File BKU
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <>
+                    {/* Monthly Summary Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Total Penerimaan</p>
+                          <p className="text-base font-bold text-emerald-700 dark:text-emerald-300">{fmtRp(bkuMonths.reduce((s, m) => s + m.totalPenerimaan, 0))}</p>
+                        </CardContent>
+                      </Card>
+                      <Card className="border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-950/30 dark:to-rose-950/30">
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Total Pengeluaran</p>
+                          <p className="text-base font-bold text-red-700 dark:text-red-300">{fmtRp(bkuMonths.reduce((s, m) => s + m.totalPengeluaran, 0))}</p>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Saldo Akhir</p>
+                          <p className="text-base font-bold">{fmtRp(bkuMonths.length > 0 ? bkuMonths[bkuMonths.length - 1].saldoAkhir : 0)}</p>
+                        </CardContent>
+                      </Card>
+                      <Card>
+                        <CardContent className="pt-3 pb-2">
+                          <p className="text-[10px] text-muted-foreground">Bulan Tercatat</p>
+                          <p className="text-base font-bold">{bkuMonths.length} bulan</p>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    {/* Monthly Comparison Bar Chart */}
+                    {bkuMonths.length > 1 && (
+                      <Card>
+                        <CardHeader className="pb-2"><CardTitle className="text-sm">Perbandingan Penerimaan vs Pengeluaran per Bulan</CardTitle></CardHeader>
+                        <CardContent>
+                          <ResponsiveContainer width="100%" height={250}>
+                            <BarChart data={bkuMonths.map(m => ({ name: m.bulan.slice(0, 3), Penerimaan: m.totalPenerimaan, Pengeluaran: m.totalPengeluaran }))}>
+                              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                              <XAxis fontSize={10} />
+                              <YAxis tickFormatter={(v: number) => `${(v/1000000).toFixed(0)}jt`} fontSize={10} />
+                              <Tooltip formatter={(v: number) => fmtRp(v)} />
+                              <Legend wrapperStyle={{ fontSize: '11px' }} />
+                              <Bar dataKey="Penerimaan" fill="#10b981" radius={[4, 4, 0, 0]} />
+                              <Bar dataKey="Pengeluaran" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Monthly Detail Sections */}
+                    <div className="space-y-4">
+                      {bkuMonths.map((month, mIdx) => {
+                        const isOpen = selectedBkuMonth === mIdx
+                        const filteredTx = month.transactions.filter(t =>
+                          !bkuSearchTerm || t.uraian.toLowerCase().includes(bkuSearchTerm.toLowerCase()) || t.tanggal.includes(bkuSearchTerm)
+                        )
+                        return (
+                          <Card key={mIdx} className="overflow-hidden">
+                            {/* Month Header - clickable */}
+                            <button
+                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors"
+                              onClick={() => setSelectedBkuMonth(isOpen ? -1 : mIdx)}
+                            >
+                              <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
+                                <Receipt className="h-4 w-4 text-white" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold">{month.bulan} {month.tahun}</span>
+                                  <Badge variant="outline" className="text-[10px]">{month.sumberDana}</Badge>
+                                </div>
+                                <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
+                                  <span className="text-emerald-600 dark:text-emerald-400">+{fmtRp(month.totalPenerimaan)}</span>
+                                  <span className="text-red-600 dark:text-red-400">-{fmtRp(month.totalPengeluaran)}</span>
+                                  <span>Saldo: {fmtRp(month.saldoAkhir)}</span>
+                                </div>
+                              </div>
+                              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                            </button>
+
+                            {/* Expanded Transaction Detail */}
+                            {isOpen && (
+                              <div className="border-t">
+                                {/* Sub-header info */}
+                                <div className="px-4 py-2 bg-muted/30 flex items-center gap-4 text-[11px] text-muted-foreground flex-wrap">
+                                  <span className="flex items-center gap-1"><Building2 className="h-3 w-3" />{month.namaSekolah}</span>
+                                  <span>NPSN: {month.npsn}</span>
+                                  {month.saldoAkhirBank > 0 && <span>Bank: {fmtRp(month.saldoAkhirBank)}</span>}
+                                  {month.saldoAkhirTunai > 0 && <span>Tunai: {fmtRp(month.saldoAkhirTunai)}</span>}
+                                </div>
+                                {/* Search within transactions */}
+                                <div className="px-4 pt-3">
+                                  <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                                    <Input placeholder="Cari transaksi..." value={bkuSearchTerm} onChange={e => setBkuSearchTerm(e.target.value)} className="pl-9 h-8 text-xs" />
+                                  </div>
+                                </div>
+                                {/* Transaction Table */}
+                                <div className="px-4 py-3 overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="border-b">
+                                        <th className="text-left py-2 px-2 font-medium text-muted-foreground whitespace-nowrap">Tanggal</th>
+                                        <th className="text-left py-2 px-2 font-medium text-muted-foreground">No. Bukti</th>
+                                        <th className="text-left py-2 px-2 font-medium text-muted-foreground">Uraian</th>
+                                        <th className="text-right py-2 px-2 font-medium text-muted-foreground whitespace-nowrap">Penerimaan</th>
+                                        <th className="text-right py-2 px-2 font-medium text-muted-foreground whitespace-nowrap">Pengeluaran</th>
+                                        <th className="text-right py-2 px-2 font-medium text-muted-foreground whitespace-nowrap">Saldo</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {filteredTx.map((tx, tIdx) => (
+                                        <tr key={tIdx} className="border-b hover:bg-muted/20 transition-colors">
+                                          <td className="py-2 px-2 whitespace-nowrap font-mono">{tx.tanggal}</td>
+                                          <td className="py-2 px-2"><span className="font-mono text-muted-foreground">{tx.noBukti || '-'}</span></td>
+                                          <td className="py-2 px-2 max-w-[300px]">
+                                            <span className={tx.pengeluaran > 0 ? 'text-red-600 dark:text-red-400' : tx.penerimaan > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''}>
+                                              {tx.uraian}
+                                            </span>
+                                          </td>
+                                          <td className="py-2 px-2 text-right whitespace-nowrap">
+                                            {tx.penerimaan > 0 ? <span className="text-emerald-600 dark:text-emerald-400 font-medium">{fmtRp(tx.penerimaan)}</span> : <span className="text-muted-foreground">-</span>}
+                                          </td>
+                                          <td className="py-2 px-2 text-right whitespace-nowrap">
+                                            {tx.pengeluaran > 0 ? <span className="text-red-600 dark:text-red-400 font-medium">{fmtRp(tx.pengeluaran)}</span> : <span className="text-muted-foreground">-</span>}
+                                          </td>
+                                          <td className="py-2 px-2 text-right whitespace-nowrap font-medium">{fmtRp(tx.saldo)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr className="border-t-2 font-semibold">
+                                        <td colSpan={3} className="py-2 px-2">Jumlah</td>
+                                        <td className="py-2 px-2 text-right whitespace-nowrap text-emerald-600 dark:text-emerald-400">{fmtRp(month.totalPenerimaan)}</td>
+                                        <td className="py-2 px-2 text-right whitespace-nowrap text-red-600 dark:text-red-400">{fmtRp(month.totalPengeluaran)}</td>
+                                        <td className="py-2 px-2 text-right whitespace-nowrap">{fmtRp(month.saldoAkhir)}</td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+                          </Card>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
               </div>
             </TabsContent>
 

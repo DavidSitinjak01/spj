@@ -52,3 +52,32 @@ Stage Summary:
 - Searchable lists for procurement and staff data
 - Budget data cached for fast repeated access (4ms vs 40s)
 - All lint checks pass
+
+---
+Task ID: 3
+Agent: Main Agent
+Task: Add BKU (Buku Kas Umum) import feature with monthly spending tables
+
+Work Log:
+- Analyzed uploaded BKU PDF (1 bku-output.pdf) - 2-page Jan 2026 cash book
+- Built /api/pdf/bku endpoint with GET (list all BKU) and POST (upload new BKU)
+- Implemented Python-based BKU table extraction using pdfplumber
+- Auto-detects month, year, sumber dana, saldo akhir from PDF content
+- Parses closing balance (Bank vs Tunai) from last page
+- Caches parsed BKU data for fast repeated access (7ms)
+- Built frontend BKU tab with:
+  - Import button supporting multiple file upload
+  - Summary KPI cards (Total Penerimaan, Total Pengeluaran, Saldo Akhir, Bulan Tercatat)
+  - Bar chart comparing Penerimaan vs Pengeluaran per month (when >1 month)
+  - Accordion-style monthly detail cards
+  - Full transaction table per month with color-coded amounts
+  - Search within transactions
+- BKU files auto-detected from upload folder by "bku" in filename
+- Sorted by month order (JANUARI-DESEMBER)
+
+Stage Summary:
+- Complete BKU import feature built
+- Supports importing multiple BKU PDF files
+- Monthly grouping with clear visual separation
+- Transaction details with Penerimaan (green) and Pengeluaran (red)
+- All lint checks pass, all APIs tested successfully
