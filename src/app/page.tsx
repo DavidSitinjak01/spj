@@ -178,23 +178,9 @@ export default function Home() {
   const [selectedSpjMonth, setSelectedSpjMonth] = useState<number>(-1) // -1 = tahunan view
   const [spjSearchTerm, setSpjSearchTerm] = useState('')
   const [spjSubTab, setSpjSubTab] = useState('master-toko')
-  const [spjDocFields, setSpjDocFields] = useState({
-    nomorSurat: '',
-    tanggalSurat: new Date().toISOString().split('T')[0],
-    kepalaSekolah: '',
-    nipKepala: '',
-    bendahara: '',
-    nipBendahara: '',
-    komiteSekolah: '',
-    nipKomite: '',
-    namaToko: '',
-    alamatToko: '',
-    picToko: '',
-    pemeriksa: '',
-    nipPemeriksa: '',
-  })
-  const [spjPesananMap, setSpjPesananMap] = useState<Record<string, string>>({})
-  const [spjSelectedPesanan, setSpjSelectedPesanan] = useState<string>('')
+  const [docSelectedBpuId, setDocSelectedBpuId] = useState<string>('')
+  const [docSelectedBnuId, setDocSelectedBnuId] = useState<string>('')
+  const [docType, setDocType] = useState<'bpu'|'bnu'>('bpu')
   const [masterDataCollapsed, setMasterDataCollapsed] = useState<Record<string, boolean>>({})
   const [toastMessages, setToastMessages] = useState<{ id: number; message: string; type: 'info' | 'warning' | 'success' }[]>([])
 
@@ -588,18 +574,6 @@ export default function Home() {
     if (rkasMonths.length > 0 || bkuMonths.length > 0) { loadSPJ() }
   }, [rkasMonths, bkuMonths])
 
-  // Initialize SPJ doc fields from RKAS/BKU data
-  useEffect(() => {
-    if (rkasMonths.length > 0 || bkuPajakMonths.length > 0) {
-      const rkas = rkasTahunan[0] || rkasBulanan[0]
-      const bkuPajak = bkuPajakMonths[0]
-      setSpjDocFields(prev => ({
-        ...prev,
-        kepalaSekolah: bkuPajak?.kepalaSekolah || rkas?.namaSekolah || prev.kepalaSekolah,
-        bendahara: bkuPajak?.bendahara || prev.bendahara,
-      }))
-    }
-  }, [rkasMonths, bkuPajakMonths])
 
   const handlePrintDoc = (docType: string) => {
     const printArea = document.getElementById('print-area')
@@ -1533,7 +1507,7 @@ export default function Home() {
                     { key: 'master-bnu', label: 'Master BNU', icon: Users },
                     { key: 'rekapitulasi', label: 'Rekapitulasi', icon: FileSpreadsheet },
                     { key: 'surat-pesanan', label: 'Surat Pesanan', icon: Package },
-                    { key: 'surat-balasan', label: 'Surat Balasan Toko', icon: Store },
+                    { key: 'surat-balasan', label: 'Dok. Perbanding', icon: Store },
                     { key: 'bast', label: 'BAST', icon: FileCheck },
                     { key: 'dokumen-perencanaan', label: 'Dok. Perencanaan', icon: ClipboardPaste },
                     { key: 'surat-hasil-pemeriksaan', label: 'Surat Hasil Periksa', icon: ShieldCheck },
@@ -2420,23 +2394,60 @@ export default function Home() {
 
                 {/* ===== GENERATED DOCUMENT SUB-TABS ===== */}
                 {!['rekapitulasi', 'master-data', 'master-toko', 'data-sekolah', 'master-bpu', 'master-bnu'].includes(spjSubTab) && (() => {
-                  const docType = spjSubTab as SPJDocType
-                  const src = selectedSpjMonth === -1 ? spjData?.tahunan : spjData?.bulanan?.[selectedSpjMonth]
+                  const currentDocType = spjSubTab as SPJDocType
 
-                  // School profile from RKAS
-                  const schoolName = tahunanData?.namaSekolah || bkuPajakMonths[0]?.namaSekolah || '-'
-                  const schoolNpsn = tahunanData?.npsn || bkuPajakMonths[0]?.npsn || '-'
-                  const schoolAlamat = tahunanData?.alamat || bkuPajakMonths[0]?.alamat || '-'
-                  const schoolKabupaten = tahunanData?.kabupaten || bkuPajakMonths[0]?.kabupaten || '-'
-                  const schoolProvinsi = tahunanData?.provinsi || bkuPajakMonths[0]?.provinsi || '-'
-                  const tahunAnggaran = tahunanData?.tahun || src?.tahun || new Date().getFullYear().toString()
+                  // Indonesian date helpers
+                  const indonesianDays: Record<string, string> = { 'Sun': 'Minggu', 'Mon': 'Senin', 'Tue': 'Selasa', 'Wed': 'Rabu', 'Thu': 'Kamis', 'Fri': 'Jumat', 'Sat': 'Sabtu' }
+                  const indonesianMonths: Record<string, string> = { '1': 'Januari', '2': 'Februari', '3': 'Maret', '4': 'April', '5': 'Mei', '6': 'Juni', '7': 'Juli', '8': 'Agustus', '9': 'September', '10': 'Oktober', '11': 'November', '12': 'Desember' }
 
-                  // Letterhead component shared by all docs
+                  const formatTanggalIndo = (dateStr: string): string => {
+                    if (!dateStr) return '....................'
+                    try {
+                      const d = new Date(dateStr)
+                      if (isNaN(d.getTime())) return '....................'
+                      const day = indonesianDays[d.toString().slice(0, 3)] || ''
+                      const tgl = d.getDate()
+                      const bulan = indonesianMonths[String(d.getMonth() + 1)] || ''
+                      const tahun = d.getFullYear()
+                      return `${day}, ${tgl} ${bulan} ${tahun}`
+                    } catch { return '....................' }
+                  }
+
+                  const formatTanggalShort = (dateStr: string): string => {
+                    if (!dateStr) return '....................'
+                    try {
+                      const d = new Date(dateStr)
+                      if (isNaN(d.getTime())) return '....................'
+                      const tgl = d.getDate()
+                      const bulan = indonesianMonths[String(d.getMonth() + 1)] || ''
+                      const tahun = d.getFullYear()
+                      return `${tgl} ${bulan} ${tahun}`
+                    } catch { return '....................' }
+                  }
+
+                  // Get the selected record
+                  const currentList = docType === 'bpu' ? bpuList : bnuList
+                  const selectedId = docType === 'bpu' ? docSelectedBpuId : docSelectedBnuId
+                  const selectedRecord = currentList.find((r: any) => r.id === selectedId)
+
+                  // Filter BPU/BNU that have noPesanan filled
+                  const eligibleBpu = bpuList.filter((b: any) => b.noPesanan && b.noPesanan.trim() !== '')
+                  const eligibleBnu = bnuList.filter((b: any) => b.noPesanan && b.noPesanan.trim() !== '')
+
+                  const toko = selectedRecord?.toko
+                  const items = selectedRecord?.items || []
+                  const tglPesan = selectedRecord?.tglPesan || ''
+                  const tahunAnggaran = tglPesan ? new Date(tglPesan).getFullYear().toString() : new Date().getFullYear().toString()
+
+                  // Compute totals
+                  const totalJumlah = items.reduce((s: number, i: any) => s + (i.jumlah || 0), 0)
+
+                  // Letterhead from sekolahData
                   const kopSurat = (
                     <div className="text-center border-b-2 border-black pb-3 mb-4">
-                      <p className="text-[13px] font-bold uppercase">{schoolName}</p>
-                      <p className="text-[10px]">NPSN: {schoolNpsn}</p>
-                      <p className="text-[10px]">{schoolAlamat}{schoolAlamat !== '-' ? ',' : ''} {schoolKabupaten}, {schoolProvinsi}</p>
+                      <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                      <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                      <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
                     </div>
                   )
 
@@ -2457,124 +2468,76 @@ export default function Home() {
                   // Doc type config
                   const docTypeConfig: Record<SPJDocType, { label: string; icon: any; bgClass: string; borderClass: string; textClass: string; iconTextClass: string }> = {
                     'surat-pesanan': { label: 'Surat Pesanan', icon: Package, bgClass: 'bg-teal-50 dark:bg-teal-950/30', borderClass: 'border-teal-200 dark:border-teal-800', textClass: 'text-teal-700 dark:text-teal-300', iconTextClass: 'text-teal-600 dark:text-teal-400' },
-                    'surat-balasan': { label: 'Surat Balasan Toko', icon: Store, bgClass: 'bg-orange-50 dark:bg-orange-950/30', borderClass: 'border-orange-200 dark:border-orange-800', textClass: 'text-orange-700 dark:text-orange-300', iconTextClass: 'text-orange-600 dark:text-orange-400' },
+                    'surat-balasan': { label: 'Dokumen Hasil Perbanding', icon: Store, bgClass: 'bg-orange-50 dark:bg-orange-950/30', borderClass: 'border-orange-200 dark:border-orange-800', textClass: 'text-orange-700 dark:text-orange-300', iconTextClass: 'text-orange-600 dark:text-orange-400' },
                     'bast': { label: 'BAST', icon: FileCheck, bgClass: 'bg-emerald-50 dark:bg-emerald-950/30', borderClass: 'border-emerald-200 dark:border-emerald-800', textClass: 'text-emerald-700 dark:text-emerald-300', iconTextClass: 'text-emerald-600 dark:text-emerald-400' },
                     'dokumen-perencanaan': { label: 'Dokumen Perencanaan', icon: ClipboardPaste, bgClass: 'bg-violet-50 dark:bg-violet-950/30', borderClass: 'border-violet-200 dark:border-violet-800', textClass: 'text-violet-700 dark:text-violet-300', iconTextClass: 'text-violet-600 dark:text-violet-400' },
                     'surat-hasil-pemeriksaan': { label: 'Surat Hasil Pemeriksaan', icon: ShieldCheck, bgClass: 'bg-rose-50 dark:bg-rose-950/30', borderClass: 'border-rose-200 dark:border-rose-800', textClass: 'text-rose-700 dark:text-rose-300', iconTextClass: 'text-rose-600 dark:text-rose-400' },
                   }
-                  const config = docTypeConfig[docType]
+                  const config = docTypeConfig[currentDocType]
                   const IconComp = config.icon
-
-                  // RKAS lookup map for matching BKU items
-                  const rkasLookup = new Map<string, string>()
-                  for (const rkasMonth of rkasMonths) {
-                    for (const item of rkasMonth.allItems) {
-                      const key = compositeKey(item.kodeProgram, item.kodeRekening)
-                      if (!rkasLookup.has(key)) {
-                        rkasLookup.set(key, item.uraian)
-                      }
-                    }
-                  }
-
-                  // Collect BKU transactions for the selected period
-                  const allBkuTransactions = (() => {
-                    if (selectedSpjMonth === -1) {
-                      return bkuMonths.flatMap(m => m.transactions)
-                    }
-                    return bkuMonths[selectedSpjMonth]?.transactions || []
-                  })()
-
-                  // Get unique No Pesanan values from spjPesananMap
-                  const uniquePesananValues = Array.from(new Set(Object.values(spjPesananMap).filter(v => v.trim())))
-
-                  // RKAS items for procurement table - now filtered by selected No Pesanan
-                  const rkasProcurementItems = (() => {
-                    // If a No Pesanan is selected, filter BKU transactions by spjPesananMap
-                    if (spjSelectedPesanan) {
-                      const matchingNoBuktis = Object.entries(spjPesananMap)
-                        .filter(([_, pesanan]) => pesanan === spjSelectedPesanan)
-                        .map(([noBukti]) => noBukti)
-
-                      const matchingTransactions = allBkuTransactions
-                        .filter(t => t.pengeluaran > 0 && matchingNoBuktis.includes(t.noBukti?.trim() || ''))
-
-                      // Group by compositeKey to merge similar items
-                      const mergedMap = new Map<string, { nama: string; namaRkas: string; jumlah: number }>()
-                      for (const t of matchingTransactions) {
-                        const ck = compositeKey(t.kodeKegiatan, t.kodeRekening)
-                        const rkasUraian = rkasLookup.get(ck) || t.uraian
-                        if (mergedMap.has(ck)) {
-                          mergedMap.get(ck)!.jumlah += t.pengeluaran
-                        } else {
-                          mergedMap.set(ck, { nama: t.uraian, namaRkas: rkasUraian, jumlah: t.pengeluaran })
-                        }
-                      }
-                      let no = 1
-                      return Array.from(mergedMap.entries()).map(([_, v]) => ({
-                        no: no++,
-                        nama: v.namaRkas !== '-' ? v.namaRkas : v.nama,
-                        volume: '1',
-                        satuan: 'Paket',
-                        hargaSatuan: v.jumlah,
-                        jumlah: v.jumlah,
-                      }))
-                    }
-
-                    // Fallback: if no pesanan selected, use the old logic from SPJ standarGroups
-                    if (!src) return []
-                    const items: { no: number; nama: string; volume: string; satuan: string; hargaSatuan: number; jumlah: number }[] = []
-                    let no = 1
-                    for (const group of src.standarGroups) {
-                      for (const item of group.items) {
-                        if (item.realisasi > 0) {
-                          items.push({
-                            no: no++,
-                            nama: item.uraian,
-                            volume: '1',
-                            satuan: 'Paket',
-                            hargaSatuan: item.realisasi,
-                            jumlah: item.realisasi,
-                          })
-                        }
-                      }
-                    }
-                    return items
-                  })()
-
-                  const totalProcurement = rkasProcurementItems.reduce((s, i) => s + i.jumlah, 0)
 
                   return (
                     <>
-                      {/* No Pesanan Selector */}
-                      {uniquePesananValues.length > 0 && (
-                        <Card>
-                          <CardContent className="py-2.5 px-3">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[10px] text-muted-foreground font-medium shrink-0">No Pesanan:</span>
+                      {/* ===== BPU/BNU SELECTOR ===== */}
+                      <Card>
+                        <CardContent className="py-3 px-4">
+                          <div className="flex items-center gap-4 flex-wrap">
+                            {/* BPU / BNU Toggle */}
+                            <div className="flex items-center gap-1">
                               <Button
-                                variant={spjSelectedPesanan === '' ? 'default' : 'outline'}
+                                variant={docType === 'bpu' ? 'default' : 'outline'}
                                 size="sm" className="h-7 text-[11px] gap-1"
-                                onClick={() => setSpjSelectedPesanan('')}
+                                onClick={() => { setDocType('bpu'); setDocSelectedBnuId('') }}
                               >
-                                Semua
+                                <ClipboardList className="h-3 w-3" /> BPU
                               </Button>
-                              {uniquePesananValues.map(pesanan => (
-                                <Button
-                                  key={pesanan}
-                                  variant={spjSelectedPesanan === pesanan ? 'default' : 'outline'}
-                                  size="sm" className="h-7 text-[11px] gap-1"
-                                  onClick={() => {
-                                    setSpjSelectedPesanan(pesanan)
-                                    setSpjDocFields(prev => ({ ...prev, nomorSurat: pesanan }))
-                                  }}
-                                >
-                                  <Receipt className="h-3 w-3" /> {pesanan}
-                                </Button>
-                              ))}
+                              <Button
+                                variant={docType === 'bnu' ? 'default' : 'outline'}
+                                size="sm" className="h-7 text-[11px] gap-1"
+                                onClick={() => { setDocType('bnu'); setDocSelectedBpuId('') }}
+                              >
+                                <Users className="h-3 w-3" /> BNU
+                              </Button>
                             </div>
-                          </CardContent>
-                        </Card>
-                      )}
+
+                            <Separator orientation="vertical" className="h-5" />
+
+                            {/* BPU/BNU Dropdown */}
+                            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                              <span className="text-[10px] text-muted-foreground font-medium shrink-0">Pilih {docType === 'bpu' ? 'BPU' : 'BNU'}:</span>
+                              <select
+                                className="h-7 text-[11px] border rounded-md px-2 flex-1 bg-background"
+                                value={selectedId}
+                                onChange={e => {
+                                  if (docType === 'bpu') setDocSelectedBpuId(e.target.value)
+                                  else setDocSelectedBnuId(e.target.value)
+                                }}
+                              >
+                                <option value="">-- Pilih --</option>
+                                {(docType === 'bpu' ? eligibleBpu : eligibleBnu).map((r: any) => (
+                                  <option key={r.id} value={r.id}>
+                                    {r.noBukti} - No Pesanan: {r.noPesanan} {r.toko ? `(${r.toko.namaToko})` : '(belum ada toko)'}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Warnings */}
+                          {selectedId && !toko && (
+                            <div className="mt-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
+                              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                              {docType === 'bpu' ? 'BPU' : 'BNU'} ini belum memiliki toko yang ditugaskan. Silakan atur toko di Master {docType === 'bpu' ? 'BPU' : 'BNU'} terlebih dahulu.
+                            </div>
+                          )}
+                          {selectedId && !sekolahData.namaSekolah && (
+                            <div className="mt-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md flex items-center gap-2 text-[10px] text-amber-700 dark:text-amber-300">
+                              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                              Data Sekolah belum diisi. Silakan lengkapi di tab Data Sekolah terlebih dahulu.
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
 
                       {/* Header Card */}
                       <Card className={`${config.borderClass} ${config.bgClass}`}>
@@ -2587,15 +2550,15 @@ export default function Home() {
                               <div>
                                 <h3 className={`text-sm font-semibold ${config.textClass}`}>{config.label}</h3>
                                 <p className="text-[10px] text-muted-foreground">
-                                  Dokumen digenerate dari data RKAS & BKU · Cetak sebagai bukti pertanggungjawaban
+                                  Data digenerate dari Master {docType === 'bpu' ? 'BPU' : 'BNU'}, Master Toko & Data Sekolah · Cetak sebagai bukti pertanggungjawaban
                                 </p>
                               </div>
                             </div>
                             <Button
                               size="sm"
                               className={`gap-1.5 ${config.bgClass} ${config.textClass} hover:opacity-90`}
-                              onClick={() => handlePrintDoc(docType)}
-                              disabled={!src}
+                              onClick={() => handlePrintDoc(currentDocType)}
+                              disabled={!selectedRecord}
                             >
                               <Printer className="h-3.5 w-3.5" />
                               Cetak Dokumen
@@ -2604,188 +2567,49 @@ export default function Home() {
                         </CardContent>
                       </Card>
 
-                      {/* No SPJ data */}
-                      {!src ? (
+                      {/* No record selected */}
+                      {!selectedRecord ? (
                         <Card className="border-dashed">
                           <CardContent className="py-12 text-center space-y-2">
                             <div className={`h-12 w-12 rounded-xl ${config.bgClass} flex items-center justify-center mx-auto`}>
                               <IconComp className={`h-6 w-6 ${config.iconTextClass}`} />
                             </div>
                             <div>
-                              <h4 className="text-xs font-medium">Belum ada data</h4>
-                              <p className="text-[10px] text-muted-foreground mt-0.5">Import RKAS dan BKU terlebih dahulu untuk menggenerate dokumen</p>
+                              <h4 className="text-xs font-medium">Pilih {docType === 'bpu' ? 'BPU' : 'BNU'} terlebih dahulu</h4>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">
+                                {(docType === 'bpu' ? eligibleBpu : eligibleBnu).length === 0
+                                  ? `Belum ada ${docType === 'bpu' ? 'BPU' : 'BNU'} dengan No Pesanan. Isi No Pesanan di Master ${docType === 'bpu' ? 'BPU' : 'BNU'} terlebih dahulu.`
+                                  : `Pilih ${docType === 'bpu' ? 'BPU' : 'BNU'} dari dropdown di atas untuk menggenerate dokumen.`}
+                              </p>
                             </div>
                           </CardContent>
                         </Card>
                       ) : (
                         <>
-                          {/* ===== ISI DATA SECTION ===== */}
-                          <Card>
-                            <CardHeader className="pb-2">
-                              <CardTitle className="text-xs flex items-center gap-2">
-                                <ClipboardList className="h-3.5 w-3.5" />
-                                Isi Data Dokumen
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">Nomor Surat</label>
-                                  <Input
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.nomorSurat}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, nomorSurat: e.target.value }))}
-                                    placeholder="contoh: 001/SP/SD/2024"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">Tanggal Surat</label>
-                                  <Input
-                                    type="date"
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.tanggalSurat}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, tanggalSurat: e.target.value }))}
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">Kepala Sekolah</label>
-                                  <Input
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.kepalaSekolah}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, kepalaSekolah: e.target.value }))}
-                                    placeholder="Nama Kepala Sekolah"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">NIP Kepala Sekolah</label>
-                                  <Input
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.nipKepala}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, nipKepala: e.target.value }))}
-                                    placeholder="NIP"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">Bendahara</label>
-                                  <Input
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.bendahara}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, bendahara: e.target.value }))}
-                                    placeholder="Nama Bendahara"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] font-medium text-muted-foreground">NIP Bendahara</label>
-                                  <Input
-                                    className="h-7 text-xs mt-0.5"
-                                    value={spjDocFields.nipBendahara}
-                                    onChange={e => setSpjDocFields(prev => ({ ...prev, nipBendahara: e.target.value }))}
-                                    placeholder="NIP"
-                                  />
-                                </div>
-                                {(docType === 'surat-pesanan' || docType === 'surat-balasan' || docType === 'bast') && (
-                                  <>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">Nama Toko/Supplier</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.namaToko}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, namaToko: e.target.value }))}
-                                        placeholder="Nama Toko"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">Alamat Toko</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.alamatToko}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, alamatToko: e.target.value }))}
-                                        placeholder="Alamat Toko"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">PIC Toko</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.picToko}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, picToko: e.target.value }))}
-                                        placeholder="Nama Penanggung Jawab"
-                                      />
-                                    </div>
-                                  </>
-                                )}
-                                {(docType === 'bast' || docType === 'dokumen-perencanaan') && (
-                                  <>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">Komite Sekolah</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.komiteSekolah}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, komiteSekolah: e.target.value }))}
-                                        placeholder="Nama Komite Sekolah"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">NIP Komite</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.nipKomite}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, nipKomite: e.target.value }))}
-                                        placeholder="NIP"
-                                      />
-                                    </div>
-                                  </>
-                                )}
-                                {docType === 'surat-hasil-pemeriksaan' && (
-                                  <>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">Pemeriksa</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.pemeriksa}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, pemeriksa: e.target.value }))}
-                                        placeholder="Nama Pemeriksa"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] font-medium text-muted-foreground">NIP Pemeriksa</label>
-                                      <Input
-                                        className="h-7 text-xs mt-0.5"
-                                        value={spjDocFields.nipPemeriksa}
-                                        onChange={e => setSpjDocFields(prev => ({ ...prev, nipPemeriksa: e.target.value }))}
-                                        placeholder="NIP"
-                                      />
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            </CardContent>
-                          </Card>
-
                           {/* ===== DOCUMENT PREVIEW ===== */}
                           <Card className="overflow-hidden">
                             <div className="bg-gray-100 dark:bg-gray-800 py-1.5 px-4 flex items-center justify-between">
                               <span className="text-[10px] font-medium text-muted-foreground">Preview Dokumen</span>
-                              <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={() => handlePrintDoc(docType)}>
+                              <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-1" onClick={() => handlePrintDoc(currentDocType)}>
                                 <Printer className="h-3 w-3" /> Cetak
                               </Button>
                             </div>
                             <CardContent className="p-0">
                               <div className="flex justify-center bg-gray-50 dark:bg-gray-900 p-4 sm:p-6 overflow-auto">
-                                <div id={`doc-content-${docType}`} className="bg-white text-black shadow-lg w-[210mm] min-h-[297mm] p-[20mm]" style={{ fontFamily: 'Times New Roman, serif', fontSize: '12pt' }}>
+                                <div id={`doc-content-${currentDocType}`} className="bg-white text-black shadow-lg w-[210mm] min-h-[297mm] p-[20mm]" style={{ fontFamily: 'Times New Roman, serif', fontSize: '12pt' }}>
 
-                                  {/* ===== SURAT PESANAN ===== */}
-                                  {docType === 'surat-pesanan' && (
+                                  {/* ===== A. SURAT PESANAN (01PESAN) ===== */}
+                                  {currentDocType === 'surat-pesanan' && (
                                     <div>
                                       {kopSurat}
                                       <div className="text-right mb-4">
-                                        <p>Nomor: {spjDocFields.nomorSurat || '............'}</p>
+                                        <p>Nomor: {selectedRecord.nomorSuratPesanan || '............'}</p>
                                         <p>Lampiran: -</p>
                                         <p>Perihal: Pesanan Barang/Jasa</p>
                                       </div>
                                       <p className="mb-1">Kepada Yth.</p>
-                                      <p className="font-bold">{spjDocFields.namaToko || '[Nama Toko/Supplier]'}</p>
-                                      <p className="mb-4">{spjDocFields.alamatToko || '[Alamat Toko]'}</p>
+                                      <p className="font-bold">{toko?.namaToko || '[Nama Toko/Supplier]'}</p>
+                                      <p className="mb-4">{toko?.alamat || '[Alamat Toko]'}</p>
                                       <p>Dengan hormat,</p>
                                       <p className="text-justify mb-4">
                                         Sehubungan dengan pelaksanaan program kerja sekolah tahun anggaran {tahunAnggaran},
@@ -2795,32 +2619,32 @@ export default function Home() {
                                         <thead>
                                           <tr className="bg-gray-100">
                                             <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                            <th className="border border-black px-2 py-1 text-left">Nama Barang/Jasa</th>
-                                            <th className="border border-black px-2 py-1 text-center w-14">Volume</th>
+                                            <th className="border border-black px-2 py-1 text-left">Uraian</th>
+                                            <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
                                             <th className="border border-black px-2 py-1 text-center w-16">Satuan</th>
                                             <th className="border border-black px-2 py-1 text-right w-28">Harga Satuan</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Jumlah</th>
+                                            <th className="border border-black px-2 py-1 text-right w-28">Total</th>
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {rkasProcurementItems.map(item => (
-                                            <tr key={item.no}>
-                                              <td className="border border-black px-2 py-1 text-center">{item.no}</td>
-                                              <td className="border border-black px-2 py-1">{item.nama}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.volume}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.satuan}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.hargaSatuan)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.jumlah)}</td>
+                                          {items.map((item: any, idx: number) => (
+                                            <tr key={idx}>
+                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{item.volume || '1'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{item.satuan || 'Paket'}</td>
+                                              <td className="border border-black px-2 py-1 text-right">{item.tarifHarga ? fmtRp(item.tarifHarga) : fmtRp(item.jumlah || 0)}</td>
+                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.jumlah || 0)}</td>
                                             </tr>
                                           ))}
-                                          {rkasProcurementItems.length === 0 && (
+                                          {items.length === 0 && (
                                             <tr>
-                                              <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada data realisasi</td>
+                                              <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
                                             </tr>
                                           )}
                                           <tr className="font-bold">
-                                            <td colSpan={5} className="border border-black px-2 py-1 text-right">Total</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(totalProcurement)}</td>
+                                            <td colSpan={5} className="border border-black px-2 py-1 text-right">JUMLAH</td>
+                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(totalJumlah)}</td>
                                           </tr>
                                         </tbody>
                                       </table>
@@ -2828,385 +2652,335 @@ export default function Home() {
                                         Demikian surat pesanan ini kami sampaikan, atas terlaksananya pesanan ini kami ucapkan terima kasih.
                                       </p>
                                       <div className="text-right mb-2">
-                                        <p>{spjDocFields.tanggalSurat ? new Date(spjDocFields.tanggalSurat).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : '....................'}</p>
-                                        <p>Kepala Sekolah</p>
+                                        <p>{formatTanggalShort(tglPesan)}</p>
                                       </div>
-                                      {signatureBlock([
-                                        { label: 'Kepala Sekolah', name: spjDocFields.kepalaSekolah, nip: spjDocFields.nipKepala },
-                                        { label: 'Bendahara', name: spjDocFields.bendahara, nip: spjDocFields.nipBendahara },
-                                      ])}
+                                      <div className="flex justify-around mt-4">
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Penyedia,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{toko?.direktur || '........................'}</p>
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Pengurus Barang,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                          {sekolahData.nipPengurus && <p className="text-[9px]">NIP. {sekolahData.nipPengurus}</p>}
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Kepala Sekolah,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          {sekolahData.nipKepala && <p className="text-[9px]">NIP. {sekolahData.nipKepala}</p>}
+                                        </div>
+                                      </div>
                                     </div>
                                   )}
 
-                                  {/* ===== SURAT BALASAN TOKO ===== */}
-                                  {docType === 'surat-balasan' && (
-                                    <div>
-                                      <div className="text-center border-b-2 border-black pb-3 mb-4">
-                                        <p className="text-[13px] font-bold uppercase">{spjDocFields.namaToko || '[Nama Toko/Supplier]'}</p>
-                                        <p className="text-[10px]">{spjDocFields.alamatToko || '[Alamat Toko]'}</p>
-                                      </div>
-                                      <div className="text-right mb-4">
-                                        <p>Nomor: ........................</p>
-                                        <p>Perihal: Balasan Pesanan Barang/Jasa</p>
-                                      </div>
-                                      <p className="mb-1">Kepada Yth.</p>
-                                      <p className="font-bold">Kepala {schoolName}</p>
-                                      <p className="mb-4">{schoolAlamat}</p>
-                                      <p>Dengan hormat,</p>
-                                      <p className="text-justify mb-4">
-                                        Menanggapi Surat Pesanan Nomor {spjDocFields.nomorSurat || '............'} tanggal{' '}
-                                        {spjDocFields.tanggalSurat ? new Date(spjDocFields.tanggalSurat).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : '....................'},
-                                        bersama ini kami konfirmasi dapat memenuhi pesanan barang/jasa sebagai berikut:
-                                      </p>
-                                      <table className="w-full border-collapse border border-black mb-4">
-                                        <thead>
-                                          <tr className="bg-gray-100">
-                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                            <th className="border border-black px-2 py-1 text-left">Nama Barang/Jasa</th>
-                                            <th className="border border-black px-2 py-1 text-center w-14">Volume</th>
-                                            <th className="border border-black px-2 py-1 text-center w-16">Satuan</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Harga Satuan</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Jumlah</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {rkasProcurementItems.map(item => (
-                                            <tr key={item.no}>
-                                              <td className="border border-black px-2 py-1 text-center">{item.no}</td>
-                                              <td className="border border-black px-2 py-1">{item.nama}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.volume}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.satuan}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.hargaSatuan)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.jumlah)}</td>
-                                            </tr>
-                                          ))}
-                                          {rkasProcurementItems.length === 0 && (
-                                            <tr>
-                                              <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada data realisasi</td>
-                                            </tr>
-                                          )}
-                                          <tr className="font-bold">
-                                            <td colSpan={5} className="border border-black px-2 py-1 text-right">Total</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(totalProcurement)}</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
-                                      <p className="text-justify mb-2">
-                                        Barang akan dikirim sesuai jadwal yang disepakati dalam waktu yang telah ditentukan.
-                                      </p>
-                                      <p className="text-justify mb-8">
-                                        Demikian surat balasan ini kami sampaikan. Atas kepercayaan Bapak/Ibu kami ucapkan terima kasih.
-                                      </p>
-                                      <div className="text-right mb-2">
-                                        <p>Hormat kami,</p>
-                                        <p>{spjDocFields.namaToko || '[Nama Toko]'}</p>
-                                      </div>
-                                      {signatureBlock([
-                                        { label: 'Penanggung Jawab', name: spjDocFields.picToko },
-                                      ])}
-                                    </div>
-                                  )}
-
-                                  {/* ===== BAST ===== */}
-                                  {docType === 'bast' && (
+                                  {/* ===== B. DOKUMEN HASIL PEMBANDING (02BANDING) ===== */}
+                                  {currentDocType === 'surat-balasan' && (
                                     <div>
                                       {kopSurat}
-                                      <h2 className="text-center font-bold text-[14pt] mb-1">BERITA ACARA SERAH TERIMA BARANG</h2>
-                                      <p className="text-center mb-4">
-                                        Nomor: {spjDocFields.nomorSurat || '............'}
-                                      </p>
-                                      <p className="mb-2">
-                                        Pada hari ini,{' '}
-                                        {spjDocFields.tanggalSurat
-                                          ? new Date(spjDocFields.tanggalSurat).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-                                          : '....................'},
-                                        yang bertanda tangan di bawah ini:
-                                      </p>
-                                      <div className="mb-4 ml-6">
-                                        <p><span className="font-bold">Pihak Pertama (Penyerah):</span></p>
-                                        <p>Nama: {spjDocFields.picToko || '........................'}</p>
-                                        <p>Dari: {spjDocFields.namaToko || '[Nama Toko/Supplier]'}</p>
-                                        <p className="mt-2"><span className="font-bold">Pihak Kedua (Penerima):</span></p>
-                                        <p>Nama: {spjDocFields.kepalaSekolah || '........................'}</p>
-                                        <p>Dari: {schoolName}</p>
-                                      </div>
-                                      <p className="text-justify mb-4">
-                                        Pihak Pertama telah menyerahkan dan Pihak Kedua telah menerima barang/jasa sebagai berikut:
-                                      </p>
+                                      <h2 className="text-center font-bold text-[13pt] mb-1">DOKUMEN HASIL PEMBANDING HARGA</h2>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratPesanan || '............'}</p>
                                       <table className="w-full border-collapse border border-black mb-4">
                                         <thead>
                                           <tr className="bg-gray-100">
                                             <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                            <th className="border border-black px-2 py-1 text-left">Nama Barang/Jasa</th>
-                                            <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
-                                            <th className="border border-black px-2 py-1 text-center w-16">Satuan</th>
-                                            <th className="border border-black px-2 py-1 text-center w-16">Kondisi</th>
-                                            <th className="border border-black px-2 py-1 text-center w-20">Keterangan</th>
+                                            <th className="border border-black px-2 py-1 text-left">Uraian</th>
+                                            <th className="border border-black px-2 py-1 text-center w-24">Produk I ({toko?.namaToko || 'Toko 1'})</th>
+                                            <th className="border border-black px-2 py-1 text-right w-24">Harga I</th>
+                                            <th className="border border-black px-2 py-1 text-center w-24">Produk II</th>
+                                            <th className="border border-black px-2 py-1 text-right w-24">Harga II</th>
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {rkasProcurementItems.map(item => (
-                                            <tr key={item.no}>
-                                              <td className="border border-black px-2 py-1 text-center">{item.no}</td>
-                                              <td className="border border-black px-2 py-1">{item.nama}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.volume}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{item.satuan}</td>
-                                              <td className="border border-black px-2 py-1 text-center">Baik</td>
-                                              <td className="border border-black px-2 py-1 text-center">Sesuai</td>
+                                          {items.map((item: any, idx: number) => (
+                                            <tr key={idx}>
+                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{toko?.namaToko || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(item.jumlah || 0)}</td>
+                                              <td className="border border-black px-2 py-1 text-center">Toko Lain</td>
+                                              <td className="border border-black px-2 py-1 text-right">{item.hargaToko2 > 0 ? fmtRp(item.hargaToko2) : '-'}</td>
                                             </tr>
                                           ))}
-                                          {rkasProcurementItems.length === 0 && (
+                                          {items.length === 0 && (
                                             <tr>
-                                              <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada data realisasi</td>
+                                              <td colSpan={6} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
                                             </tr>
                                           )}
                                         </tbody>
                                       </table>
-                                      <p className="mb-8">
-                                        Total nilai penyerahan: <span className="font-bold">{fmtRp(totalProcurement)}</span>
+                                      <p className="mb-4 text-justify">
+                                        Keterangan: Toko terpilih adalah <span className="font-bold">{toko?.namaToko || '............'}</span> dengan harga paling kompetitif.
                                       </p>
+                                      <div className="text-right mb-2">
+                                        <p>{formatTanggalShort(tglPesan)}</p>
+                                      </div>
+                                      <div className="flex justify-around mt-4">
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Penyedia,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{toko?.direktur || '........................'}</p>
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Pengurus Barang,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                          {sekolahData.nipPengurus && <p className="text-[9px]">NIP. {sekolahData.nipPengurus}</p>}
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Kepala Sekolah,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          {sekolahData.nipKepala && <p className="text-[9px]">NIP. {sekolahData.nipKepala}</p>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* ===== C. DOKUMEN PERENCANAAN (03RENCANA) ===== */}
+                                  {currentDocType === 'dokumen-perencanaan' && (
+                                    <div>
+                                      {kopSurat}
+                                      <h2 className="text-center font-bold text-[13pt] mb-1">DOKUMEN PERENCANAAN PENGADAAN BARANG/JASA</h2>
+                                      <p className="text-center mb-4">Tahun Anggaran {tahunAnggaran}</p>
+
+                                      <table className="mb-4">
+                                        <tbody>
+                                          <tr><td className="w-36 py-0.5">Nama Sekolah</td><td className="py-0.5">: {sekolahData.namaSekolah || '........................'}</td></tr>
+                                          <tr><td className="py-0.5">NPSN</td><td className="py-0.5">: {sekolahData.npsn || '............'}</td></tr>
+                                          <tr><td className="py-0.5">Alamat</td><td className="py-0.5">: {sekolahData.alamat || '............'}</td></tr>
+                                          <tr><td className="py-0.5">Kategori</td><td className="py-0.5">: {toko?.kategori || 'Barang'}</td></tr>
+                                        </tbody>
+                                      </table>
+
+                                      <p className="font-bold mb-2">Daftar Spesifikasi:</p>
+                                      <table className="w-full border-collapse border border-black mb-4">
+                                        <thead>
+                                          <tr className="bg-gray-100">
+                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
+                                            <th className="border border-black px-2 py-1 text-left">Uraian Barang/Jasa</th>
+                                            <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
+                                            <th className="border border-black px-2 py-1 text-center w-16">Satuan</th>
+                                            <th className="border border-black px-2 py-1 text-center w-12">✓</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {items.map((item: any, idx: number) => (
+                                            <tr key={idx}>
+                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{item.volume || '1'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{item.satuan || 'Paket'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">✓</td>
+                                            </tr>
+                                          ))}
+                                          {items.length === 0 && (
+                                            <tr>
+                                              <td colSpan={5} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
+                                            </tr>
+                                          )}
+                                        </tbody>
+                                      </table>
+
+                                      <div className="text-right mb-2">
+                                        <p>{formatTanggalShort(tglPesan)}</p>
+                                      </div>
+                                      <div className="flex justify-around mt-4">
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Pengurus Barang,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                          {sekolahData.nipPengurus && <p className="text-[9px]">NIP. {sekolahData.nipPengurus}</p>}
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Kepala Sekolah,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.kepalaSekolah || '........................'}</p>
+                                          {sekolahData.nipKepala && <p className="text-[9px]">NIP. {sekolahData.nipKepala}</p>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* ===== D. SURAT HASIL PEMERIKSAAN (04SHP) ===== */}
+                                  {currentDocType === 'surat-hasil-pemeriksaan' && (
+                                    <div>
+                                      {kopSurat}
+                                      <h2 className="text-center font-bold text-[13pt] mb-1">SURAT HASIL PEMERIKSAAN BARANG/JASA</h2>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratSHP || '............'}</p>
+
+                                      <p className="mb-2">
+                                        Pada hari {formatTanggalIndo(tglPesan)}, kami yang bertanda tangan di bawah ini:
+                                      </p>
+
+                                      <div className="mb-4 ml-6">
+                                        <table>
+                                          <tbody>
+                                            <tr><td className="w-24 py-0.5">Nama</td><td className="py-0.5">: {sekolahData.penerimaBarang || '........................'}</td></tr>
+                                            <tr><td className="py-0.5">Jabatan</td><td className="py-0.5">: Penerima Barang</td></tr>
+                                          </tbody>
+                                        </table>
+                                        <div className="h-2" />
+                                        <table>
+                                          <tbody>
+                                            <tr><td className="w-24 py-0.5">Nama</td><td className="py-0.5">: {sekolahData.pengurusBarang || '........................'}</td></tr>
+                                            <tr><td className="py-0.5">Jabatan</td><td className="py-0.5">: Pengurus Barang</td></tr>
+                                          </tbody>
+                                        </table>
+                                      </div>
+
+                                      <p className="text-justify mb-2">
+                                        Telah melakukan pemeriksaan terhadap barang/jasa yang diserahkan oleh:
+                                      </p>
+                                      <div className="ml-6 mb-4">
+                                        <p className="font-bold">{toko?.namaToko || '[Nama Toko]'}</p>
+                                        <p>{toko?.alamat || '[Alamat Toko]'}</p>
+                                      </div>
+
+                                      <table className="w-full border-collapse border border-black mb-4">
+                                        <thead>
+                                          <tr className="bg-gray-100">
+                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
+                                            <th className="border border-black px-2 py-1 text-left">Nama Barang</th>
+                                            <th className="border border-black px-2 py-1 text-center w-14">Jumlah</th>
+                                            <th className="border border-black px-2 py-1 text-center w-20">Kondisi</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {items.map((item: any, idx: number) => (
+                                            <tr key={idx}>
+                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">{item.volume || '1'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">Baik</td>
+                                            </tr>
+                                          ))}
+                                          {items.length === 0 && (
+                                            <tr>
+                                              <td colSpan={4} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
+                                            </tr>
+                                          )}
+                                        </tbody>
+                                      </table>
+
+                                      <p className="text-justify mb-8">
+                                        Kesimpulan: Barang/jasa tersebut di atas dalam kondisi <span className="font-bold">BAIK</span> dan sesuai dengan pesanan.
+                                      </p>
+
+                                      <div className="text-right mb-2">
+                                        <p>{formatTanggalShort(tglPesan)}</p>
+                                      </div>
+                                      <div className="flex justify-around mt-4">
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Penerima Barang,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.penerimaBarang || '........................'}</p>
+                                          {sekolahData.nipPenerima && <p className="text-[9px]">NIP. {sekolahData.nipPenerima}</p>}
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">Pengurus Barang,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.pengurusBarang || '........................'}</p>
+                                          {sekolahData.nipPengurus && <p className="text-[9px]">NIP. {sekolahData.nipPengurus}</p>}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* ===== E. BAST (05BAST) ===== */}
+                                  {currentDocType === 'bast' && (
+                                    <div>
+                                      {kopSurat}
+                                      <h2 className="text-center font-bold text-[13pt] mb-1">BERITA ACARA SERAH TERIMA BARANG/JASA</h2>
+                                      <p className="text-center mb-4">Nomor: {selectedRecord.nomorSuratBAST || '............'}</p>
+
+                                      <p className="mb-2">
+                                        Pada hari {formatTanggalIndo(tglPesan)}, yang bertanda tangan di bawah ini:
+                                      </p>
+
+                                      <div className="mb-4 ml-6">
+                                        <p className="font-bold">PIHAK PERTAMA:</p>
+                                        <table>
+                                          <tbody>
+                                            <tr><td className="w-24 py-0.5">Nama</td><td className="py-0.5">: {toko?.direktur || '........................'}</td></tr>
+                                            <tr><td className="py-0.5">Jabatan</td><td className="py-0.5">: Penyedia {toko?.kategori || 'Barang/Jasa'}</td></tr>
+                                            <tr><td className="py-0.5">Alamat</td><td className="py-0.5">: {toko?.alamat || '............'}</td></tr>
+                                            <tr><td className="py-0.5">No. HP</td><td className="py-0.5">: {toko?.noHp || '-'}</td></tr>
+                                          </tbody>
+                                        </table>
+                                        <div className="h-2" />
+                                        <p className="font-bold">PIHAK KEDUA:</p>
+                                        <table>
+                                          <tbody>
+                                            <tr><td className="w-24 py-0.5">Nama</td><td className="py-0.5">: {sekolahData.penerimaBarang || '........................'}</td></tr>
+                                            <tr><td className="py-0.5">Jabatan</td><td className="py-0.5">: Penerima Barang</td></tr>
+                                            <tr><td className="py-0.5">Alamat</td><td className="py-0.5">: {sekolahData.namaSekolah || '............'}</td></tr>
+                                            <tr><td className="py-0.5">No. HP</td><td className="py-0.5">: -</td></tr>
+                                          </tbody>
+                                        </table>
+                                      </div>
+
+                                      <p className="text-justify mb-4">
+                                        Telah melakukan serah terima barang/jasa:
+                                      </p>
+
+                                      <table className="w-full border-collapse border border-black mb-4">
+                                        <thead>
+                                          <tr className="bg-gray-100">
+                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
+                                            <th className="border border-black px-2 py-1 text-left">Nama Barang</th>
+                                            <th className="border border-black px-2 py-1 text-center w-20">Diserahkan</th>
+                                            <th className="border border-black px-2 py-1 text-center w-20">Diterima</th>
+                                            <th className="border border-black px-2 py-1 text-center w-20">Kondisi</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {items.map((item: any, idx: number) => (
+                                            <tr key={idx}>
+                                              <td className="border border-black px-2 py-1 text-center">{idx + 1}</td>
+                                              <td className="border border-black px-2 py-1">{item.uraian || '-'}</td>
+                                              <td className="border border-black px-2 py-1 text-center">✓</td>
+                                              <td className="border border-black px-2 py-1 text-center">✓</td>
+                                              <td className="border border-black px-2 py-1 text-center">Baik</td>
+                                            </tr>
+                                          ))}
+                                          {items.length === 0 && (
+                                            <tr>
+                                              <td colSpan={5} className="border border-black px-2 py-4 text-center text-gray-400 italic">Belum ada item</td>
+                                            </tr>
+                                          )}
+                                        </tbody>
+                                      </table>
+
                                       <p className="text-justify mb-8">
                                         Demikian berita acara ini dibuat dengan sebenarnya untuk dapat dipergunakan sebagaimana mestinya.
                                       </p>
-                                      {signatureBlock([
-                                        { label: 'Pihak Pertama', name: spjDocFields.picToko },
-                                        { label: 'Pihak Kedua', name: spjDocFields.kepalaSekolah, nip: spjDocFields.nipKepala },
-                                      ])}
-                                      <div className="mt-4 text-center">
+
+                                      <div className="flex justify-around mt-4">
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">PIHAK PERTAMA,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{toko?.direktur || '........................'}</p>
+                                        </div>
+                                        <div className="text-center w-36">
+                                          <p className="text-[10px]">PIHAK KEDUA,</p>
+                                          <div className="h-16" />
+                                          <p className="text-[11px] font-bold underline">{sekolahData.penerimaBarang || '........................'}</p>
+                                          {sekolahData.nipPenerima && <p className="text-[9px]">NIP. {sekolahData.nipPenerima}</p>}
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-6 text-center">
                                         <p className="text-[10px]">Mengetahui,</p>
-                                        <p className="text-[10px]">Komite Sekolah</p>
+                                        <p className="text-[10px]">Kepala Sekolah</p>
                                         <div className="h-12" />
-                                        <p className="font-bold underline text-[11px]">{spjDocFields.komiteSekolah || '........................'}</p>
-                                        {spjDocFields.nipKomite && <p className="text-[9px]">NIP. {spjDocFields.nipKomite}</p>}
+                                        <p className="font-bold underline text-[11px]">{sekolahData.kepalaSekolah || '........................'}</p>
+                                        {sekolahData.nipKepala && <p className="text-[9px]">NIP. {sekolahData.nipKepala}</p>}
                                       </div>
                                     </div>
                                   )}
-
-                                  {/* ===== DOKUMEN PERENCANAAN ===== */}
-                                  {docType === 'dokumen-perencanaan' && (
-                                    <div>
-                                      {kopSurat}
-                                      <h2 className="text-center font-bold text-[14pt] mb-1">DOKUMEN PERENCANAAN ANGGARAN</h2>
-                                      <p className="text-center mb-4">Tahun Anggaran {tahunAnggaran}</p>
-
-                                      <h3 className="font-bold text-[12pt] mt-4 mb-2">I. PENDAHULUAN</h3>
-                                      <table className="mb-4">
-                                        <tbody>
-                                          <tr><td className="w-36 py-0.5">Nama Sekolah</td><td className="py-0.5">: {schoolName}</td></tr>
-                                          <tr><td className="py-0.5">NPSN</td><td className="py-0.5">: {schoolNpsn}</td></tr>
-                                          <tr><td className="py-0.5">Alamat</td><td className="py-0.5">: {schoolAlamat}</td></tr>
-                                          <tr><td className="py-0.5">Kabupaten/Kota</td><td className="py-0.5">: {schoolKabupaten}</td></tr>
-                                          <tr><td className="py-0.5">Provinsi</td><td className="py-0.5">: {schoolProvinsi}</td></tr>
-                                          <tr><td className="py-0.5">Tahun Anggaran</td><td className="py-0.5">: {tahunAnggaran}</td></tr>
-                                        </tbody>
-                                      </table>
-
-                                      <h3 className="font-bold text-[12pt] mt-4 mb-2">II. RENCANA ANGGARAN</h3>
-                                      <table className="mb-4">
-                                        <tbody>
-                                          <tr><td className="w-36 py-0.5">Sumber Dana</td><td className="py-0.5">: {tahunanData?.sumberDana || 'BOS Reguler'}</td></tr>
-                                          <tr><td className="py-0.5">Total Penerimaan</td><td className="py-0.5">: {fmtRp(tahunanData?.totalPenerimaan || src?.totalAnggaran || 0)}</td></tr>
-                                          <tr><td className="py-0.5">Total Belanja</td><td className="py-0.5">: {fmtRp(src?.totalAnggaran || 0)}</td></tr>
-                                        </tbody>
-                                      </table>
-
-                                      <h3 className="font-bold text-[12pt] mt-4 mb-2">III. ALOKASI PER STANDAR</h3>
-                                      <table className="w-full border-collapse border border-black mb-4">
-                                        <thead>
-                                          <tr className="bg-gray-100">
-                                            <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                            <th className="border border-black px-2 py-1 text-left">Standar</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Anggaran</th>
-                                            <th className="border border-black px-2 py-1 text-right w-28">Realisasi</th>
-                                            <th className="border border-black px-2 py-1 text-right w-24">Selisih</th>
-                                            <th className="border border-black px-2 py-1 text-center w-12">%</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {src.standarGroups.map((g, i) => (
-                                            <tr key={g.kode}>
-                                              <td className="border border-black px-2 py-1 text-center">{i + 1}</td>
-                                              <td className="border border-black px-2 py-1">{g.nama}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(g.anggaran)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(g.realisasi)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(Math.abs(g.selisih))}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{g.persenRealisasi}%</td>
-                                            </tr>
-                                          ))}
-                                          <tr className="font-bold">
-                                            <td colSpan={2} className="border border-black px-2 py-1 text-right">Total</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(src.totalAnggaran)}</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(src.totalRealisasi)}</td>
-                                            <td className="border border-black px-2 py-1 text-right">{fmtRp(Math.abs(src.totalSelisih))}</td>
-                                            <td className="border border-black px-2 py-1 text-center">{src.persenRealisasi}%</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
-
-                                      <h3 className="font-bold text-[12pt] mt-4 mb-2">IV. RINCIAN BELANJA</h3>
-                                      {src.standarGroups.map((group, gi) => (
-                                        <div key={group.kode} className="mb-4">
-                                          <p className="font-bold mb-1">{gi + 1}. {group.nama}</p>
-                                          <table className="w-full border-collapse border border-black">
-                                            <thead>
-                                              <tr className="bg-gray-100">
-                                                <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                                <th className="border border-black px-2 py-1 text-left">Uraian</th>
-                                                <th className="border border-black px-2 py-1 text-right w-28">Anggaran</th>
-                                                <th className="border border-black px-2 py-1 text-right w-28">Realisasi</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {group.items.map((item, ii) => (
-                                                <tr key={ii}>
-                                                  <td className="border border-black px-2 py-1 text-center">{ii + 1}</td>
-                                                  <td className="border border-black px-2 py-1">{item.uraian}</td>
-                                                  <td className="border border-black px-2 py-1 text-right">{fmtRp(item.anggaran)}</td>
-                                                  <td className="border border-black px-2 py-1 text-right">{item.realisasi > 0 ? fmtRp(item.realisasi) : '-'}</td>
-                                                </tr>
-                                              ))}
-                                              <tr className="font-bold bg-gray-50">
-                                                <td colSpan={2} className="border border-black px-2 py-1 text-right">Subtotal</td>
-                                                <td className="border border-black px-2 py-1 text-right">{fmtRp(group.anggaran)}</td>
-                                                <td className="border border-black px-2 py-1 text-right">{fmtRp(group.realisasi)}</td>
-                                              </tr>
-                                            </tbody>
-                                          </table>
-                                        </div>
-                                      ))}
-
-                                      <div className="mt-8">
-                                        {signatureBlock([
-                                          { label: 'Kepala Sekolah', name: spjDocFields.kepalaSekolah, nip: spjDocFields.nipKepala },
-                                          { label: 'Bendahara', name: spjDocFields.bendahara, nip: spjDocFields.nipBendahara },
-                                        ])}
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* ===== SURAT HASIL PEMERIKSAAN ===== */}
-                                  {docType === 'surat-hasil-pemeriksaan' && (() => {
-                                    // Calculate inspection results
-                                    const totalAnggaran = src.totalAnggaran
-                                    const totalRealisasiVal = src.totalRealisasi
-                                    const sisaVal = totalAnggaran - totalRealisasiVal
-                                    const persenVal = totalAnggaran > 0 ? Math.round((totalRealisasiVal / totalAnggaran) * 100) : 0
-
-                                    const getStatus = (persen: number): string => {
-                                      if (persen > 100) return 'Lebih'
-                                      if (persen >= 90) return 'Sesuai'
-                                      if (persen >= 1) return 'Sebagian'
-                                      return 'Belum'
-                                    }
-
-                                    const allItemsWithStatus = src.standarGroups.flatMap(g =>
-                                      g.items.map(item => ({
-                                        ...item,
-                                        standarNama: g.nama,
-                                        statusPemeriksaan: getStatus(item.persenRealisasi),
-                                      }))
-                                    )
-
-                                    const temuanItems = allItemsWithStatus.filter(i => i.statusPemeriksaan === 'Lebih' || i.statusPemeriksaan === 'Belum')
-                                    const sesuaiCount = allItemsWithStatus.filter(i => i.statusPemeriksaan === 'Sesuai').length
-                                    const sebagianCount = allItemsWithStatus.filter(i => i.statusPemeriksaan === 'Sebagian').length
-                                    const lebihCount = allItemsWithStatus.filter(i => i.statusPemeriksaan === 'Lebih').length
-                                    const belumCount = allItemsWithStatus.filter(i => i.statusPemeriksaan === 'Belum').length
-
-                                    const kesimpulan = lebihCount === 0 && belumCount === 0
-                                      ? 'Secara umum, pengelolaan keuangan sekolah telah sesuai dengan rencana anggaran (RKAS). Seluruh pos belanja telah terealisasi dengan baik.'
-                                      : lebihCount > 0 && belumCount > 0
-                                      ? `Terdapat ${lebihCount} pos yang melebihi anggaran dan ${belumCount} pos yang belum terealisasi. Perlu dilakukan perbaikan dalam pengelolaan keuangan.`
-                                      : lebihCount > 0
-                                      ? `Terdapat ${lebihCount} pos yang melebihi anggaran. Perlu dilakukan penyesuaian dan penjelasan terhadap kelebihan realisasi.`
-                                      : `Terdapat ${belumCount} pos yang belum terealisasi. Perlu dilakukan upaya percepatan realisasi anggaran pada pos-pos tersebut.`
-
-                                    return (
-                                      <div>
-                                        {kopSurat}
-                                        <h2 className="text-center font-bold text-[14pt] mb-1">SURAT HASIL PEMERIKSAAN</h2>
-                                        <p className="text-center mb-4">Nomor: {spjDocFields.nomorSurat || '............'}</p>
-
-                                        <h3 className="font-bold text-[12pt] mt-4 mb-2">I. KEUANGAN</h3>
-                                        <table className="mb-4">
-                                          <tbody>
-                                            <tr><td className="w-36 py-0.5">Total Anggaran</td><td className="py-0.5">: {fmtRp(totalAnggaran)}</td></tr>
-                                            <tr><td className="py-0.5">Total Realisasi</td><td className="py-0.5">: {fmtRp(totalRealisasiVal)}</td></tr>
-                                            <tr><td className="py-0.5">Sisa Anggaran</td><td className="py-0.5">: {fmtRp(Math.abs(sisaVal))} {sisaVal >= 0 ? '(sisa)' : '(defisit)'}</td></tr>
-                                            <tr><td className="py-0.5">Persentase Realisasi</td><td className="py-0.5">: {persenVal}%</td></tr>
-                                          </tbody>
-                                        </table>
-
-                                        <h3 className="font-bold text-[12pt] mt-4 mb-2">II. KECOCOKAN DENGAN RKAS</h3>
-                                        <table className="w-full border-collapse border border-black mb-4">
-                                          <thead>
-                                            <tr className="bg-gray-100">
-                                              <th className="border border-black px-2 py-1 text-center w-10">No</th>
-                                              <th className="border border-black px-2 py-1 text-left">Uraian</th>
-                                              <th className="border border-black px-2 py-1 text-right w-24">Anggaran</th>
-                                              <th className="border border-black px-2 py-1 text-right w-24">Realisasi</th>
-                                              <th className="border border-black px-2 py-1 text-right w-20">Selisih</th>
-                                              <th className="border border-black px-2 py-1 text-center w-16">Status</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {allItemsWithStatus.map((item, i) => (
-                                              <tr key={i}>
-                                                <td className="border border-black px-2 py-1 text-center">{i + 1}</td>
-                                                <td className="border border-black px-2 py-1">{item.uraian}</td>
-                                                <td className="border border-black px-2 py-1 text-right">{fmtRp(item.anggaran)}</td>
-                                                <td className="border border-black px-2 py-1 text-right">{item.realisasi > 0 ? fmtRp(item.realisasi) : '-'}</td>
-                                                <td className="border border-black px-2 py-1 text-right">{item.realisasi > 0 ? fmtRp(Math.abs(item.selisih)) : '-'}</td>
-                                                <td className={`border border-black px-2 py-1 text-center text-[10px] font-bold ${
-                                                  item.statusPemeriksaan === 'Sesuai' ? 'text-emerald-700' :
-                                                  item.statusPemeriksaan === 'Sebagian' ? 'text-amber-700' :
-                                                  item.statusPemeriksaan === 'Lebih' ? 'text-rose-700' : 'text-red-700'
-                                                }`}>
-                                                  {item.statusPemeriksaan}
-                                                </td>
-                                              </tr>
-                                            ))}
-                                            <tr className="font-bold">
-                                              <td colSpan={2} className="border border-black px-2 py-1 text-right">Total</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(totalAnggaran)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(totalRealisasiVal)}</td>
-                                              <td className="border border-black px-2 py-1 text-right">{fmtRp(Math.abs(sisaVal))}</td>
-                                              <td className="border border-black px-2 py-1 text-center">{getStatus(persenVal)}</td>
-                                            </tr>
-                                          </tbody>
-                                        </table>
-
-                                        <h3 className="font-bold text-[12pt] mt-4 mb-2">III. TEMUAN</h3>
-                                        {temuanItems.length > 0 ? (
-                                          <ol className="list-decimal ml-6 mb-4 space-y-1">
-                                            {temuanItems.map((item, i) => (
-                                              <li key={i}>
-                                                <span className="font-bold">{item.uraian}</span>
-                                                {' — '}
-                                                {item.statusPemeriksaan === 'Lebih'
-                                                  ? `Realisasi melebihi anggaran sebesar ${fmtRp(Math.abs(item.selisih))} (${item.persenRealisasi}% dari anggaran).`
-                                                  : `Belum ada realisasi pada pos ini (anggaran: ${fmtRp(item.anggaran)}).`
-                                                }
-                                              </li>
-                                            ))}
-                                          </ol>
-                                        ) : (
-                                          <p className="mb-4 italic">Tidak ada temuan yang memerlukan tindak lanjut.</p>
-                                        )}
-
-                                        <h3 className="font-bold text-[12pt] mt-4 mb-2">IV. KESIMPULAN</h3>
-                                        <p className="text-justify mb-8">{kesimpulan}</p>
-
-                                        <div className="text-right mb-2">
-                                          <p>{spjDocFields.tanggalSurat ? new Date(spjDocFields.tanggalSurat).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }) : '....................'}</p>
-                                        </div>
-                                        {signatureBlock([
-                                          { label: 'Pemeriksa', name: spjDocFields.pemeriksa, nip: spjDocFields.nipPemeriksa },
-                                          { label: 'Kepala Sekolah', name: spjDocFields.kepalaSekolah, nip: spjDocFields.nipKepala },
-                                        ])}
-                                      </div>
-                                    )
-                                  })()}
 
                                 </div>
                               </div>
