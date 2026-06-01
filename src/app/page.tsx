@@ -3541,7 +3541,8 @@ export default function Home() {
                                       {/* Tanggal & Tanda Tangan */}
                                       <div className="flex justify-between mt-4 text-[10pt]">
                                         <div className="text-center w-40">
-                                          <p className="font-bold">{toko?.namaToko || '........................'}</p>
+                                          <p>&nbsp;</p>
+                                          <p className="mt-1 font-bold">{toko?.namaToko || '........................'}</p>
                                           <div className="h-16" />
                                           <p className="font-bold underline">{toko?.direktur || '........................'}</p>
                                           <p>Direktur</p>
