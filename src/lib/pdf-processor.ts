@@ -108,6 +108,7 @@ export async function uploadToBlob(fileName: string, buffer: Buffer, contentType
   const blob = await put(`${BLOB_PREFIX}${fileName}`, buffer, {
     access: 'private',
     contentType: contentType || 'application/pdf',
+    allowOverwrite: true,
   });
   return { url: blob.url };
 }
