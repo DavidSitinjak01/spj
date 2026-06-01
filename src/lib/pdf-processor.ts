@@ -178,19 +178,48 @@ export async function getBlobUrl(fileName: string): Promise<string | null> {
   return info?.url || null;
 }
 
-// --- pdf-parse helper ---
+// --- PDF text extraction using pdfjs-dist ---
 
 async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   text: string;
   numpages: number;
   info: Record<string, unknown>;
+  perPageText: { page: number; text: string }[];
 }> {
-  const pdf = (await import('pdf-parse')).default;
-  const data = await pdf(buffer);
+  // Use pdfjs-dist (Mozilla PDF.js) for reliable text extraction in serverless
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const uint8 = new Uint8Array(buffer);
+  const doc = await pdfjsLib.getDocument({ data: uint8 }).promise;
+
+  const perPageText: { page: number; text: string }[] = [];
+  let fullText = '';
+
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(' ');
+    perPageText.push({ page: i, text: pageText });
+    fullText += pageText + '\n';
+  }
+
+  // Get document metadata
+  let info: Record<string, unknown> = {};
+  try {
+    const metadata = await doc.getMetadata();
+    if (metadata && metadata.info) {
+      info = metadata.info as Record<string, unknown>;
+    }
+  } catch {
+    // Metadata not available, continue
+  }
+
   return {
-    text: data.text,
-    numpages: data.numpages,
-    info: data.info,
+    text: fullText.trim(),
+    numpages: doc.numPages,
+    info,
+    perPageText,
   };
 }
 
@@ -221,44 +250,18 @@ export async function getPDFFiles(): Promise<string[]> {
 
 export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
-    // Serverless: download from private blob using get() + pdf-parse
+    // Serverless: download from private blob using get() + pdfjs-dist
     // Use pathname-based download which handles private store authentication automatically
     const pathname = `${BLOB_PREFIX}${fileName}`;
     const buffer = await downloadFromBlobByPathname(pathname);
     const parsed = await extractTextWithPdfParse(buffer);
 
-    // pdf-parse gives us all text as one string; we split by pages heuristically
-    // Since pdf-parse doesn't give per-page text easily, we put it all on "page 1"
-    // For better per-page support, the API routes can re-process if needed
-    const extractedText: { page: number; text: string }[] = [];
-
-    // Try to split text by page breaks (form feed character)
-    const pages = parsed.text.split('\f');
-    if (pages.length > 1) {
-      for (let i = 0; i < pages.length; i++) {
-        if (pages[i].trim()) {
-          extractedText.push({ page: i + 1, text: pages[i].trim() });
-        }
-      }
-    }
-
-    // If no form-feed splits, try to infer pages from numpages
-    if (extractedText.length === 0 && parsed.text.trim()) {
-      // If we can't split, put all text on individual pages based on numpages
-      // Better approach: split by lines and distribute
-      if (parsed.numpages <= 1) {
-        extractedText.push({ page: 1, text: parsed.text.trim() });
-      } else {
-        // Put all text as page 1 with a note - downstream code can handle it
-        extractedText.push({ page: 1, text: parsed.text.trim() });
-      }
-    }
-
+    // pdfjs-dist gives us per-page text directly
     return {
       fileName,
       filePath: pathname,
       pageCount: parsed.numpages,
-      extractedText,
+      extractedText: parsed.perPageText,
     };
   }
 

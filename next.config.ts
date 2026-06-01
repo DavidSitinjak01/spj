@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  serverExternalPackages: ["pdfjs-dist"],
+  turbopack: {},
 };
 
 export default nextConfig;
