@@ -270,12 +270,14 @@ export async function POST(request: Request) {
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
     // Deduplicate: remove other BKU files with the same bulan+tahun
+    let replacedFile: string | null = null;
     if (data.bulan && data.tahun) {
       const existingFiles = fs.readdirSync(UPLOAD_DIR)
         .filter(f => f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.endsWith('.pdf') && f !== file.name);
       for (const existing of existingFiles) {
         const existingData = parseBKUFile(existing);
         if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+          replacedFile = existing;
           // Delete the old file and its cache
           const oldPath = path.join(UPLOAD_DIR, existing);
           const oldCache = getCacheKey(existing);
@@ -288,7 +290,7 @@ export async function POST(request: Request) {
       try { fs.unlinkSync(newCache); } catch {}
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, replaced: replacedFile });
   } catch (error: any) {
     console.error('BKU upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

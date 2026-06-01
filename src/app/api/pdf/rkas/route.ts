@@ -36,6 +36,7 @@ interface RKASMonth {
   fileName: string;
   bulan: string;
   tahun: string;
+  tipe: 'bulanan' | 'tahunan';
   sumberDana: string;
   namaSekolah: string;
   npsn: string;
@@ -439,10 +440,14 @@ function parseRKASFile(fileName: string): RKASMonth | null {
   // Calculate total belanja from leaf items
   const totalBelanja = allItems.reduce((s, item) => s + item.jumlah, 0);
 
+  const bulanValue = (header.bulan || '').toUpperCase();
+  const tipe: 'bulanan' | 'tahunan' = bulanValue ? 'bulanan' : 'tahunan';
+
   const rkasMonth: RKASMonth = {
     fileName,
-    bulan: (header.bulan || '').toUpperCase(),
+    bulan: bulanValue,
     tahun: header.tahun || '',
+    tipe,
     sumberDana: header.sumberDana || '',
     namaSekolah: header.namaSekolah || '',
     npsn: header.npsn || '',
@@ -488,22 +493,23 @@ export async function GET() {
       }
     }
 
-    // Sort by month order, then year
+    // Sort: tahunan first, then bulanan by month order, then year
     months.sort((a, b) => {
       if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
+      // Tahunan comes after all months of the same year
+      if (a.tipe !== b.tipe) return a.tipe === 'tahunan' ? 1 : -1;
       const ma = MONTH_ORDER.indexOf(a.bulan);
       const mb = MONTH_ORDER.indexOf(b.bulan);
-      // Files without a month go last
       const ia = ma === -1 ? 99 : ma;
       const ib = mb === -1 ? 99 : mb;
       return ia - ib;
     });
 
-    // Deduplicate by bulan+tahun (keep first, remove older duplicate files)
+    // Deduplicate: bulanan by bulan+tahun, tahunan by tahun only
     const seen = new Map<string, RKASMonth>();
     const toDelete: string[] = [];
     for (const m of months) {
-      const key = `${m.bulan}_${m.tahun}`;
+      const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `${m.bulan}_${m.tahun}`;
       if (seen.has(key)) {
         toDelete.push(m.fileName);
       } else {
@@ -519,7 +525,11 @@ export async function GET() {
     }
     const dedupedMonths = Array.from(seen.values());
 
-    return NextResponse.json({ months: dedupedMonths, files });
+    // Separate into bulanan and tahunan
+    const bulanan = dedupedMonths.filter(m => m.tipe === 'bulanan');
+    const tahunan = dedupedMonths.filter(m => m.tipe === 'tahunan');
+
+    return NextResponse.json({ months: dedupedMonths, bulanan, tahunan, files });
   } catch (error: any) {
     console.error('RKAS list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -542,14 +552,21 @@ export async function POST(request: Request) {
     const data = parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
 
-    // Deduplicate: remove other RKAS files with the same bulan+tahun
-    if (data.bulan && data.tahun) {
+    // Deduplicate: remove other RKAS files with the same key
+    // Bulanan: dedup by bulan+tahun, Tahunan: dedup by tahun only
+    let replacedFile: string | null = null;
+    if (data.tahun) {
       const existingFiles = fs.readdirSync(UPLOAD_DIR)
         .filter(f => isRKASFile(f) && f !== file.name);
       for (const existing of existingFiles) {
         try {
           const existingData = parseRKASFile(existing);
-          if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+          if (!existingData) continue;
+          const isDuplicate = data.tipe === 'tahunan'
+            ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
+            : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
+          if (isDuplicate) {
+            replacedFile = existing;
             const oldPath = path.join(UPLOAD_DIR, existing);
             const oldCache = getCacheKey(existing);
             try { fs.unlinkSync(oldPath); } catch {}
@@ -557,12 +574,12 @@ export async function POST(request: Request) {
           }
         } catch {}
       }
-      // Invalidate cache for new file
+      // Invalidate cache for new file so next GET parses fresh
       const newCache = getCacheKey(file.name);
       try { fs.unlinkSync(newCache); } catch {}
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe });
   } catch (error: any) {
     console.error('RKAS upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

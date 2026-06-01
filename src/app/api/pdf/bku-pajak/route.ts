@@ -482,6 +482,7 @@ export async function POST(request: Request) {
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
     // Deduplicate: remove other BKU Pajak files with the same bulan+tahun
+    let replacedFile: string | null = null;
     if (data.bulan && data.tahun) {
       const existingFiles = fs.readdirSync(UPLOAD_DIR)
         .filter(f => isBKUPajakFile(f) && f !== file.name);
@@ -489,6 +490,7 @@ export async function POST(request: Request) {
         try {
           const existingData = parseBKUPajakFile(existing);
           if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+            replacedFile = existing;
             const oldPath = path.join(UPLOAD_DIR, existing);
             const oldCache = getCacheKey(existing);
             try { fs.unlinkSync(oldPath); } catch {}
@@ -501,7 +503,7 @@ export async function POST(request: Request) {
       try { fs.unlinkSync(newCache); } catch {}
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, replaced: replacedFile });
   } catch (error: any) {
     console.error('BKU Pajak upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
