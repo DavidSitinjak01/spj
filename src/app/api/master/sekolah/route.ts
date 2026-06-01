@@ -27,6 +27,8 @@ const defaultDataSekolah = {
   logoKiriTinggi: 3.0,
   logoKananLebar: 2.5,
   logoKananTinggi: 3.0,
+  garisBawahStyle: 'single-thick',
+  garisBawahJarak: 4,
   createdAt: null as string | null,
   updatedAt: null as string | null,
 };
@@ -179,6 +181,10 @@ export async function POST(request: Request) {
     if (typeof body.logoKiriTinggi === 'number') fields.logoKiriTinggi = body.logoKiriTinggi;
     if (typeof body.logoKananLebar === 'number') fields.logoKananLebar = body.logoKananLebar;
     if (typeof body.logoKananTinggi === 'number') fields.logoKananTinggi = body.logoKananTinggi;
+
+    // Garis bawah KOP (optional)
+    if (typeof body.garisBawahStyle === 'string') fields.garisBawahStyle = body.garisBawahStyle;
+    if (typeof body.garisBawahJarak === 'number') fields.garisBawahJarak = body.garisBawahJarak;
 
     // Find the existing record (should be at most one)
     const existing = await db.dataSekolah.findFirst();

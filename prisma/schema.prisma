@@ -48,6 +48,8 @@ model DataSekolah {
   logoKiriTinggi  Float    @default(3.0) // height in cm
   logoKananLebar  Float    @default(2.5) // width in cm
   logoKananTinggi Float    @default(3.0) // height in cm
+  garisBawahStyle String   @default("single-thick") // line style: 'single-thin', 'single-thick', 'double', 'double-thick-thin', 'none'
+  garisBawahJarak Float    @default(4)   // spacing between last KOP row and line (in pt)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

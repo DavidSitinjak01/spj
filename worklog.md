@@ -75,3 +75,41 @@ Stage Summary:
 - Each KOP row can have its own line height (0.5 - 3.0, step 0.1)
 - Default lineHeight = 1.3 for new rows
 - Both preview and document print rendering respect lineHeight
+
+---
+Task ID: 4
+Agent: main
+Task: Add garis bawah KOP controls, fix 1-logo proportional layout, add spacing between last KOP row and line
+
+Work Log:
+- Added `garisBawahStyle` (String, default 'single-thick') and `garisBawahJarak` (Float, default 4) fields to DataSekolah Prisma model
+- Pushed schema changes to SQLite database
+- Updated sekolah API POST handler to accept garisBawahStyle and garisBawahJarak
+- Updated default data object to include garisBawahStyle and garisBawahJarak defaults
+- Added `renderGarisBawah()` helper function supporting 6 line styles:
+  - single-thin: 1px solid border
+  - single-thick: 2px solid border (default)
+  - double: two 1px lines
+  - double-thick-thin: 2px + 1px lines
+  - double-thin-thick: 1px + 2px lines
+  - none: no line
+- Added `hasLogoKiri`, `hasLogoKanan`, `logoCount` computed values for proportional layout
+- Fixed KOP preview to support 4 layout modes:
+  - 0 logos: centered text only
+  - 1 logo kiri: logo left + text right
+  - 1 logo kanan: text left + logo right
+  - 2 logos: classic 3-column layout
+- Added "Garis Bawah KOP" editor section with:
+  - Gaya Garis dropdown (6 styles)
+  - Jarak number stepper (↓/↑ buttons, range 0-20 pt)
+  - Mini line preview below controls
+- Updated KOP preview to use dynamic garis rendering (replacing hardcoded border-b-2)
+- Updated document print kopSurat to use same proportional logo layout and dynamic garis
+- Padding between last text row and garis controlled by garisBawahJarak (in pt)
+- Updated sekolahData initial state to include garisBawahStyle and garisBawahJarak
+
+Stage Summary:
+- Garis bawah KOP fully configurable: 6 line styles, adjustable spacing (0-20 pt)
+- 1-logo layout is now proportional (logo + centered text, not empty space on other side)
+- Both KOP preview and document print rendering use dynamic garis and layout
+- Fields persisted in database via sekolahData save

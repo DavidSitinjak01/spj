@@ -204,7 +204,7 @@ export default function Home() {
   const [tokoSearch, setTokoSearch] = useState('')
 
   // --- Data Sekolah states ---
-  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:'', logoKiriUrl:'', logoKananUrl:'', logoKiriLebar:2.5, logoKiriTinggi:3, logoKananLebar:2.5, logoKananTinggi:3})
+  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:'', logoKiriUrl:'', logoKananUrl:'', logoKiriLebar:2.5, logoKiriTinggi:3, logoKananLebar:2.5, logoKananTinggi:3, garisBawahStyle:'single-thick', garisBawahJarak:4})
   const [sekolahLoading, setSekolahLoading] = useState(false)
   const [sekolahSaving, setSekolahSaving] = useState(false)
   const [logoUploading, setLogoUploading] = useState<'kiri'|'kanan'|null>(null)
@@ -878,6 +878,48 @@ export default function Home() {
   const rkasBarData = rkasMonths.length > 0
     ? rkasMonths.map(m => ({ name: (MONTH_NAMES[m.bulan] || (m.tipe === 'tahunan' ? 'Tahunan' : m.bulan.slice(0, 3))) + ' ' + m.tahun, Penerimaan: m.totalPenerimaan, Belanja: m.totalBelanja }))
     : []
+
+  // --- Helper: render garis bawah KOP based on style ---
+  const renderGarisBawah = (style: string) => {
+    switch (style) {
+      case 'single-thin':
+        return <div style={{ borderBottom: '1px solid #000' }} />
+      case 'single-thick':
+        return <div style={{ borderBottom: '2px solid #000' }} />
+      case 'double':
+        return (
+          <div>
+            <div style={{ borderBottom: '1px solid #000' }} />
+            <div style={{ margin: '2px 0' }} />
+            <div style={{ borderBottom: '1px solid #000' }} />
+          </div>
+        )
+      case 'double-thick-thin':
+        return (
+          <div>
+            <div style={{ borderBottom: '2px solid #000' }} />
+            <div style={{ margin: '2px 0' }} />
+            <div style={{ borderBottom: '1px solid #000' }} />
+          </div>
+        )
+      case 'double-thin-thick':
+        return (
+          <div>
+            <div style={{ borderBottom: '1px solid #000' }} />
+            <div style={{ margin: '2px 0' }} />
+            <div style={{ borderBottom: '2px solid #000' }} />
+          </div>
+        )
+      case 'none':
+      default:
+        return null
+    }
+  }
+
+  // --- Helper: determine which logos are present ---
+  const hasLogoKiri = !!sekolahData.logoKiriUrl
+  const hasLogoKanan = !!sekolahData.logoKananUrl
+  const logoCount = (hasLogoKiri ? 1 : 0) + (hasLogoKanan ? 1 : 0)
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -2093,18 +2135,67 @@ export default function Home() {
 
                             <Separator />
 
+                            {/* --- Garis Bawah KOP --- */}
+                            <div className="space-y-2">
+                              <h4 className="text-[11px] font-semibold">Garis Bawah KOP</h4>
+                              <div className="flex items-center gap-3 flex-wrap">
+                                {/* Garis Style */}
+                                <div className="flex items-center gap-1.5">
+                                  <label className="text-[9px] text-muted-foreground">Gaya Garis:</label>
+                                  <select
+                                    className="h-6 text-[10px] border rounded px-1 bg-background"
+                                    value={sekolahData.garisBawahStyle || 'single-thick'}
+                                    onChange={e => setSekolahData(prev => ({...prev, garisBawahStyle: e.target.value}))}
+                                  >
+                                    <option value="single-thin">Garis 1 (tipis)</option>
+                                    <option value="single-thick">Garis 1 (tebal)</option>
+                                    <option value="double">Garis 2 (tipis-tipis)</option>
+                                    <option value="double-thick-thin">Garis 2 (tebal-tipis)</option>
+                                    <option value="double-thin-thick">Garis 2 (tipis-tebal)</option>
+                                    <option value="none">Tanpa Garis</option>
+                                  </select>
+                                </div>
+                                {/* Garis Jarak (spacing from last row to line) */}
+                                <div className="flex items-center gap-0.5">
+                                  <label className="text-[9px] text-muted-foreground mr-0.5">Jarak:</label>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 text-[11px]"
+                                    onClick={() => setSekolahData(prev => ({...prev, garisBawahJarak: Math.max(0, (prev.garisBawahJarak || 4) - 1)}))}
+                                    disabled={(sekolahData.garisBawahJarak || 4) <= 0}
+                                  >
+                                    ↓
+                                  </Button>
+                                  <span className="text-[10px] w-6 text-center font-mono">{sekolahData.garisBawahJarak ?? 4}</span>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 text-[11px]"
+                                    onClick={() => setSekolahData(prev => ({...prev, garisBawahJarak: Math.min(20, (prev.garisBawahJarak || 4) + 1)}))}
+                                    disabled={(sekolahData.garisBawahJarak || 4) >= 20}
+                                  >
+                                    ↑
+                                  </Button>
+                                  <span className="text-[9px] text-muted-foreground">pt</span>
+                                </div>
+                              </div>
+                              {/* Garis preview mini */}
+                              <div className="border rounded p-2 bg-white">
+                                {renderGarisBawah(sekolahData.garisBawahStyle || 'single-thick')}
+                              </div>
+                            </div>
+
+                            <Separator />
+
                             {/* --- KOP Preview --- */}
                             <div className="space-y-1">
                               <h4 className="text-[11px] font-semibold">Pratinjau KOP</h4>
                               <div className="border rounded-lg p-4 bg-white">
-                                <div className="border-b-2 border-black pb-3">
-                                  <div className="flex items-center justify-between">
-                                    <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
-                                      {sekolahData.logoKiriUrl && (
-                                        <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
-                                      )}
-                                    </div>
-                                    <div className="text-center flex-1 min-w-0 px-2">
+                                <div style={{ paddingBottom: `${sekolahData.garisBawahJarak || 4}pt` }}>
+                                  {/* 0 logos: just centered text */}
+                                  {logoCount === 0 && (
+                                    <div className="text-center">
                                       {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
                                         <p
                                           key={row.id}
@@ -2125,13 +2216,100 @@ export default function Home() {
                                         <p className="text-gray-400 text-[10px]">Belum ada baris teks</p>
                                       )}
                                     </div>
-                                    <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
-                                      {sekolahData.logoKananUrl && (
-                                        <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
-                                      )}
+                                  )}
+                                  {/* 1 logo kiri only: logo left, text right */}
+                                  {logoCount === 1 && hasLogoKiri && !hasLogoKanan && (
+                                    <div className="flex items-center">
+                                      <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                        <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      </div>
+                                      <div className="text-center flex-1 min-w-0 px-2">
+                                        {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                          <p
+                                            key={row.id}
+                                            style={{
+                                              fontFamily: row.fontFamily,
+                                              fontSize: `${row.fontSize}pt`,
+                                              fontWeight: row.bold ? 'bold' : 'normal',
+                                              fontStyle: row.italic ? 'italic' : 'normal',
+                                              textTransform: row.uppercase ? 'uppercase' : 'none',
+                                              lineHeight: row.lineHeight || 1.3,
+                                              color: '#000',
+                                            }}
+                                          >
+                                            {row.teks || '........................'}
+                                          </p>
+                                        ))}
+                                        {kopRows.length === 0 && (
+                                          <p className="text-gray-400 text-[10px]">Belum ada baris teks</p>
+                                        )}
+                                      </div>
                                     </div>
-                                  </div>
+                                  )}
+                                  {/* 1 logo kanan only: text left, logo right */}
+                                  {logoCount === 1 && !hasLogoKiri && hasLogoKanan && (
+                                    <div className="flex items-center">
+                                      <div className="text-center flex-1 min-w-0 px-2">
+                                        {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                          <p
+                                            key={row.id}
+                                            style={{
+                                              fontFamily: row.fontFamily,
+                                              fontSize: `${row.fontSize}pt`,
+                                              fontWeight: row.bold ? 'bold' : 'normal',
+                                              fontStyle: row.italic ? 'italic' : 'normal',
+                                              textTransform: row.uppercase ? 'uppercase' : 'none',
+                                              lineHeight: row.lineHeight || 1.3,
+                                              color: '#000',
+                                            }}
+                                          >
+                                            {row.teks || '........................'}
+                                          </p>
+                                        ))}
+                                        {kopRows.length === 0 && (
+                                          <p className="text-gray-400 text-[10px]">Belum ada baris teks</p>
+                                        )}
+                                      </div>
+                                      <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                        <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* 2 logos: classic 3-column layout */}
+                                  {logoCount === 2 && (
+                                    <div className="flex items-center justify-between">
+                                      <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                        <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      </div>
+                                      <div className="text-center flex-1 min-w-0 px-2">
+                                        {[...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                          <p
+                                            key={row.id}
+                                            style={{
+                                              fontFamily: row.fontFamily,
+                                              fontSize: `${row.fontSize}pt`,
+                                              fontWeight: row.bold ? 'bold' : 'normal',
+                                              fontStyle: row.italic ? 'italic' : 'normal',
+                                              textTransform: row.uppercase ? 'uppercase' : 'none',
+                                              lineHeight: row.lineHeight || 1.3,
+                                              color: '#000',
+                                            }}
+                                          >
+                                            {row.teks || '........................'}
+                                          </p>
+                                        ))}
+                                        {kopRows.length === 0 && (
+                                          <p className="text-gray-400 text-[10px]">Belum ada baris teks</p>
+                                        )}
+                                      </div>
+                                      <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                                        <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
+                                {/* Garis bawah */}
+                                {renderGarisBawah(sekolahData.garisBawahStyle || 'single-thick')}
                               </div>
                             </div>
                           </CardContent>
@@ -2928,16 +3106,10 @@ export default function Home() {
 
                   // Letterhead from sekolahData
                   const kopSurat = (
-                    <div className="border-b-2 border-black pb-3 mb-4">
-                      <div className="flex items-center justify-between">
-                        {/* Logo Kiri */}
-                        <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
-                          {sekolahData.logoKiriUrl && (
-                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
-                          )}
-                        </div>
-                        {/* Center text from KOP rows */}
-                        <div className="text-center flex-1 min-w-0 px-2">
+                    <div style={{ paddingBottom: `${sekolahData.garisBawahJarak || 4}pt`, marginBottom: '16px' }}>
+                      {/* 0 logos: just centered text */}
+                      {((!sekolahData.logoKiriUrl && !sekolahData.logoKananUrl)) && (
+                        <div className="text-center">
                           {kopRows.length > 0 ? (
                             [...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
                               <p
@@ -2962,13 +3134,111 @@ export default function Home() {
                             </>
                           )}
                         </div>
-                        {/* Logo Kanan */}
-                        <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
-                          {sekolahData.logoKananUrl && (
-                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
-                          )}
+                      )}
+                      {/* 1 logo kiri only */}
+                      {sekolahData.logoKiriUrl && !sekolahData.logoKananUrl && (
+                        <div className="flex items-center">
+                          <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                          </div>
+                          <div className="text-center flex-1 min-w-0 px-2">
+                            {kopRows.length > 0 ? (
+                              [...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                <p
+                                  key={row.id}
+                                  style={{
+                                    fontFamily: row.fontFamily,
+                                    fontSize: `${row.fontSize}pt`,
+                                    fontWeight: row.bold ? 'bold' : 'normal',
+                                    fontStyle: row.italic ? 'italic' : 'normal',
+                                    textTransform: row.uppercase ? 'uppercase' : 'none',
+                                    lineHeight: row.lineHeight || 1.3,
+                                  }}
+                                >
+                                  {row.teks || '........................'}
+                                </p>
+                              ))
+                            ) : (
+                              <>
+                                <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                                <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                                <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      )}
+                      {/* 1 logo kanan only */}
+                      {!sekolahData.logoKiriUrl && sekolahData.logoKananUrl && (
+                        <div className="flex items-center">
+                          <div className="text-center flex-1 min-w-0 px-2">
+                            {kopRows.length > 0 ? (
+                              [...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                <p
+                                  key={row.id}
+                                  style={{
+                                    fontFamily: row.fontFamily,
+                                    fontSize: `${row.fontSize}pt`,
+                                    fontWeight: row.bold ? 'bold' : 'normal',
+                                    fontStyle: row.italic ? 'italic' : 'normal',
+                                    textTransform: row.uppercase ? 'uppercase' : 'none',
+                                    lineHeight: row.lineHeight || 1.3,
+                                  }}
+                                >
+                                  {row.teks || '........................'}
+                                </p>
+                              ))
+                            ) : (
+                              <>
+                                <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                                <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                                <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                              </>
+                            )}
+                          </div>
+                          <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                          </div>
+                        </div>
+                      )}
+                      {/* 2 logos: classic 3-column layout */}
+                      {sekolahData.logoKiriUrl && sekolahData.logoKananUrl && (
+                        <div className="flex items-center justify-between">
+                          <div style={{ width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" style={{ height: `${(sekolahData.logoKiriTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKiriLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                          </div>
+                          <div className="text-center flex-1 min-w-0 px-2">
+                            {kopRows.length > 0 ? (
+                              [...kopRows].sort((a, b) => a.urutan - b.urutan).map((row) => (
+                                <p
+                                  key={row.id}
+                                  style={{
+                                    fontFamily: row.fontFamily,
+                                    fontSize: `${row.fontSize}pt`,
+                                    fontWeight: row.bold ? 'bold' : 'normal',
+                                    fontStyle: row.italic ? 'italic' : 'normal',
+                                    textTransform: row.uppercase ? 'uppercase' : 'none',
+                                    lineHeight: row.lineHeight || 1.3,
+                                  }}
+                                >
+                                  {row.teks || '........................'}
+                                </p>
+                              ))
+                            ) : (
+                              <>
+                                <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                                <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                                <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                              </>
+                            )}
+                          </div>
+                          <div style={{ width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, flexShrink: 0 }}>
+                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" style={{ height: `${(sekolahData.logoKananTinggi || 3) * 10}mm`, width: `${(sekolahData.logoKananLebar || 2.5) * 10}mm`, objectFit: 'contain' }} />
+                          </div>
+                        </div>
+                      )}
+                      {/* Garis bawah */}
+                      {renderGarisBawah(sekolahData.garisBawahStyle || 'single-thick')}
                     </div>
                   )
 
