@@ -21,6 +21,8 @@ const defaultDataSekolah = {
   nipPengurus: '',
   penerimaBarang: '',
   nipPenerima: '',
+  logoKiriUrl: '',
+  logoKananUrl: '',
   createdAt: null as string | null,
   updatedAt: null as string | null,
 };

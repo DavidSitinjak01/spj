@@ -19,7 +19,7 @@ import {
   ChevronDown, ArrowUpRight, ArrowDownRight, Info,
   Receipt, FilePlus2, ArrowRight, Minus, Plus, Trash2, ClipboardList,
   Scale, Package, Store, FileCheck, ClipboardPaste, ShieldCheck, Printer,
-  Database, ChevronUp,
+  Database, ChevronUp, ImagePlus, Image as ImageIcon,
 } from 'lucide-react'
 import {
   PieChart as RechartsPie, Pie, Cell, BarChart, Bar, XAxis, YAxis,
@@ -191,9 +191,12 @@ export default function Home() {
   const [tokoSearch, setTokoSearch] = useState('')
 
   // --- Data Sekolah states ---
-  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:''})
+  const [sekolahData, setSekolahData] = useState<any>({namaSekolah:'', npsn:'', alamat:'', kabupaten:'', provinsi:'', kepalaSekolah:'', nipKepala:'', bendahara:'', nipBendahara:'', pengurusBarang:'', nipPengurus:'', penerimaBarang:'', nipPenerima:'', logoKiriUrl:'', logoKananUrl:''})
   const [sekolahLoading, setSekolahLoading] = useState(false)
   const [sekolahSaving, setSekolahSaving] = useState(false)
+  const [logoUploading, setLogoUploading] = useState<'kiri'|'kanan'|null>(null)
+  const logoKiriInputRef = useRef<HTMLInputElement>(null)
+  const logoKananInputRef = useRef<HTMLInputElement>(null)
 
   // --- Master BPU states ---
   const [bpuList, setBpuList] = useState<any[]>([])
@@ -483,6 +486,52 @@ export default function Home() {
       else { addToast('Gagal menyimpan data sekolah', 'warning') }
     } catch { addToast('Gagal menyimpan data sekolah', 'warning') }
     finally { setSekolahSaving(false) }
+  }
+
+  // Logo upload handler
+  const handleLogoUpload = async (posisi: 'kiri' | 'kanan', file: File) => {
+    if (file.size > 4 * 1024 * 1024) {
+      addToast('Ukuran file maksimal 4 MB', 'warning')
+      return
+    }
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml']
+    if (!allowedTypes.includes(file.type)) {
+      addToast('Format file tidak didukung. Gunakan PNG, JPG, WebP, atau SVG.', 'warning')
+      return
+    }
+    setLogoUploading(posisi)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('posisi', posisi)
+      const res = await fetch('/api/master/sekolah/logo', { method: 'POST', body: formData })
+      if (res.ok) {
+        const data = await res.json()
+        setSekolahData((prev: any) => ({
+          ...prev,
+          [posisi === 'kiri' ? 'logoKiriUrl' : 'logoKananUrl']: data.dataUrl,
+        }))
+        addToast(`Logo ${posisi} berhasil diupload`, 'success')
+      } else {
+        const err = await res.json()
+        addToast(err.error || 'Gagal mengupload logo', 'warning')
+      }
+    } catch { addToast('Gagal mengupload logo', 'warning') }
+    finally { setLogoUploading(null) }
+  }
+
+  // Logo delete handler
+  const handleLogoDelete = async (posisi: 'kiri' | 'kanan') => {
+    try {
+      const res = await fetch(`/api/master/sekolah/logo?posisi=${posisi}`, { method: 'DELETE' })
+      if (res.ok) {
+        setSekolahData((prev: any) => ({
+          ...prev,
+          [posisi === 'kiri' ? 'logoKiriUrl' : 'logoKananUrl']: '',
+        }))
+        addToast(`Logo ${posisi} berhasil dihapus`, 'success')
+      }
+    } catch { addToast('Gagal menghapus logo', 'warning') }
   }
 
   const loadBPU = async () => {
@@ -1653,6 +1702,146 @@ export default function Home() {
                       <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}</div>
                     ) : (
                       <div className="grid gap-4">
+                        {/* Logo Sekolah */}
+                        <Card>
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-xs flex items-center gap-1.5">
+                              <ImageIcon className="h-3.5 w-3.5" />
+                              Logo Kop Sekolah
+                            </CardTitle>
+                            <p className="text-[10px] text-muted-foreground">Logo untuk KOP surat dokumen SPJ (maks. 4 MB per logo, format PNG/JPG/WebP/SVG)</p>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              {/* Logo Kiri */}
+                              <div className="space-y-2">
+                                <label className="text-[11px] font-medium text-muted-foreground">Logo Kiri (Lambang Negara)</label>
+                                <div className="relative group border-2 border-dashed rounded-lg overflow-hidden transition-colors hover:border-primary/50 bg-muted/30"
+                                  style={{ minHeight: '120px' }}>
+                                  {sekolahData.logoKiriUrl ? (
+                                    <div className="flex flex-col items-center justify-center p-3 h-full">
+                                      <img
+                                        src={sekolahData.logoKiriUrl}
+                                        alt="Logo Kiri"
+                                        className="max-h-20 max-w-full object-contain"
+                                      />
+                                      <div className="mt-2 flex gap-1.5">
+                                        <Button
+                                          variant="outline" size="sm"
+                                          className="h-6 text-[10px] gap-1"
+                                          onClick={() => logoKiriInputRef.current?.click()}
+                                          disabled={logoUploading === 'kiri'}
+                                        >
+                                          {logoUploading === 'kiri' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
+                                          Ganti
+                                        </Button>
+                                        <Button
+                                          variant="outline" size="sm"
+                                          className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive"
+                                          onClick={() => handleLogoDelete('kiri')}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                          Hapus
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className="flex flex-col items-center justify-center p-4 cursor-pointer h-full"
+                                      style={{ minHeight: '120px' }}
+                                      onClick={() => logoKiriInputRef.current?.click()}
+                                    >
+                                      {logoUploading === 'kiri' ? (
+                                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                                      ) : (
+                                        <>
+                                          <ImagePlus className="h-8 w-8 text-muted-foreground/50 mb-2" />
+                                          <p className="text-[10px] text-muted-foreground text-center">Klik untuk upload logo kiri</p>
+                                          <p className="text-[9px] text-muted-foreground/60 mt-0.5">Maks. 4 MB</p>
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <input
+                                  ref={logoKiriInputRef}
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0]
+                                    if (file) handleLogoUpload('kiri', file)
+                                    e.target.value = ''
+                                  }}
+                                />
+                              </div>
+
+                              {/* Logo Kanan */}
+                              <div className="space-y-2">
+                                <label className="text-[11px] font-medium text-muted-foreground">Logo Kanan (Logo Sekolah)</label>
+                                <div className="relative group border-2 border-dashed rounded-lg overflow-hidden transition-colors hover:border-primary/50 bg-muted/30"
+                                  style={{ minHeight: '120px' }}>
+                                  {sekolahData.logoKananUrl ? (
+                                    <div className="flex flex-col items-center justify-center p-3 h-full">
+                                      <img
+                                        src={sekolahData.logoKananUrl}
+                                        alt="Logo Kanan"
+                                        className="max-h-20 max-w-full object-contain"
+                                      />
+                                      <div className="mt-2 flex gap-1.5">
+                                        <Button
+                                          variant="outline" size="sm"
+                                          className="h-6 text-[10px] gap-1"
+                                          onClick={() => logoKananInputRef.current?.click()}
+                                          disabled={logoUploading === 'kanan'}
+                                        >
+                                          {logoUploading === 'kanan' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImagePlus className="h-3 w-3" />}
+                                          Ganti
+                                        </Button>
+                                        <Button
+                                          variant="outline" size="sm"
+                                          className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive"
+                                          onClick={() => handleLogoDelete('kanan')}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                          Hapus
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className="flex flex-col items-center justify-center p-4 cursor-pointer h-full"
+                                      style={{ minHeight: '120px' }}
+                                      onClick={() => logoKananInputRef.current?.click()}
+                                    >
+                                      {logoUploading === 'kanan' ? (
+                                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                                      ) : (
+                                        <>
+                                          <ImagePlus className="h-8 w-8 text-muted-foreground/50 mb-2" />
+                                          <p className="text-[10px] text-muted-foreground text-center">Klik untuk upload logo kanan</p>
+                                          <p className="text-[9px] text-muted-foreground/60 mt-0.5">Maks. 4 MB</p>
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <input
+                                  ref={logoKananInputRef}
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0]
+                                    if (file) handleLogoUpload('kanan', file)
+                                    e.target.value = ''
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
                         <Card>
                           <CardHeader className="pb-2"><CardTitle className="text-xs">Identitas Sekolah</CardTitle></CardHeader>
                           <CardContent className="space-y-3">
@@ -2444,10 +2633,27 @@ export default function Home() {
 
                   // Letterhead from sekolahData
                   const kopSurat = (
-                    <div className="text-center border-b-2 border-black pb-3 mb-4">
-                      <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
-                      <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
-                      <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                    <div className="border-b-2 border-black pb-3 mb-4">
+                      <div className="flex items-center justify-between">
+                        {/* Logo Kiri */}
+                        <div className="w-16 flex-shrink-0">
+                          {sekolahData.logoKiriUrl && (
+                            <img src={sekolahData.logoKiriUrl} alt="Logo Kiri" className="h-14 w-14 object-contain" />
+                          )}
+                        </div>
+                        {/* Center text */}
+                        <div className="text-center flex-1 min-w-0">
+                          <p className="text-[13px] font-bold uppercase">{sekolahData.namaSekolah || '........................'}</p>
+                          <p className="text-[10px]">NPSN: {sekolahData.npsn || '............'}</p>
+                          <p className="text-[10px]">{sekolahData.alamat || '............'}</p>
+                        </div>
+                        {/* Logo Kanan */}
+                        <div className="w-16 flex-shrink-0">
+                          {sekolahData.logoKananUrl && (
+                            <img src={sekolahData.logoKananUrl} alt="Logo Kanan" className="h-14 w-14 object-contain" />
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )
 
