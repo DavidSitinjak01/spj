@@ -576,9 +576,12 @@ export default function Home() {
                         return (
                           <Card key={mIdx} className="overflow-hidden">
                             {/* Month Header - clickable */}
-                            <button
-                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors"
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors cursor-pointer"
                               onClick={() => { setSelectedRkasMonth(isOpen ? -1 : mIdx); setSelectedRkasStandar('all'); setRkasSearchTerm('') }}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedRkasMonth(isOpen ? -1 : mIdx); setSelectedRkasStandar('all'); setRkasSearchTerm('') } }}
                             >
                               <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shrink-0">
                                 <ClipboardList className="h-4 w-4 text-white" />
@@ -598,7 +601,7 @@ export default function Home() {
                                 <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
                               </Button>
                               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                            </button>
+                            </div>
 
                             {/* Expanded Detail */}
                             {isOpen && (
@@ -791,9 +794,12 @@ export default function Home() {
                         return (
                           <Card key={mIdx} className="overflow-hidden">
                             {/* Month Header - clickable */}
-                            <button
-                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors"
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/30 transition-colors cursor-pointer"
                               onClick={() => setSelectedBkuMonth(isOpen ? -1 : mIdx)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedBkuMonth(isOpen ? -1 : mIdx) } }}
                             >
                               <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
                                 <Receipt className="h-4 w-4 text-white" />
@@ -813,7 +819,7 @@ export default function Home() {
                                 <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
                               </Button>
                               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-                            </button>
+                            </div>
 
                             {/* Expanded Transaction Detail */}
                             {isOpen && (
