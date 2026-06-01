@@ -3623,8 +3623,8 @@ export default function Home() {
                                           </tbody>
                                         </table>
 
-                                        <div className="flex justify-between mt-4 text-[10pt]">
-                                          <div className="text-center w-1/3">
+                                        <div className="grid grid-cols-3 gap-2 mt-4 text-[10pt]">
+                                          <div className="text-center">
                                             <p className="font-bold">Mengetahui :</p>
                                             <p>Pengurus Barang</p>
                                             <div className="h-16" />
@@ -3632,7 +3632,7 @@ export default function Home() {
                                             <p>Penata Muda</p>
                                             {sekolahData.nipPengurus && <p>NIP. {sekolahData.nipPengurus}</p>}
                                           </div>
-                                          <div className="text-center w-1/3">
+                                          <div className="text-center">
                                             <p className="font-bold">Lunas Bayar Oleh :</p>
                                             <p>Bendahara {sekolahData.namaSekolah || '........................'}</p>
                                             <div className="h-16" />
@@ -3640,16 +3640,16 @@ export default function Home() {
                                             <p>Penata TK. I</p>
                                             {sekolahData.nipBendahara && <p>NIP. {sekolahData.nipBendahara}</p>}
                                           </div>
-                                          <div className="text-center w-1/3">
+                                          <div className="text-center">
                                             <p className="font-bold">Diterima oleh :</p>
                                             <p>{toko?.namaToko || '........................'}</p>
                                             <div className="h-16" />
-                                            <p className="font-bold underline">{toko?.direktur || '........................'}</p>
+                                            <p>-</p>
                                             <p>Direktur</p>
                                           </div>
                                         </div>
 
-                                        <div className="text-center mt-4 text-[10pt]">
+                                        <div className="text-center mt-6 text-[10pt]">
                                           <p className="font-bold">Menyetujui :</p>
                                           <p>Kepala Sekolah {sekolahData.namaSekolah || '........................'}</p>
                                           <div className="h-16" />
@@ -4036,8 +4036,8 @@ export default function Home() {
                                       </table>
 
                                       <div className="mt-6 text-[10pt]">
-                                        <div className="flex justify-between">
-                                          <div className="text-center" style={{ width: '30%' }}>
+                                        <div className="grid grid-cols-3 gap-2">
+                                          <div className="text-center">
                                             <p className="font-bold">Mengetahui :</p>
                                             <p>Pengurus Barang</p>
                                             <div className="h-16" />
@@ -4045,7 +4045,7 @@ export default function Home() {
                                             <p>Penata Muda</p>
                                             {sekolahData.nipPengurus && <p>NIP. {sekolahData.nipPengurus}</p>}
                                           </div>
-                                          <div className="text-center" style={{ width: '30%' }}>
+                                          <div className="text-center">
                                             <p className="font-bold">Lunas Bayar Oleh :</p>
                                             <p>Bendahara {sekolahData.namaSekolah || '........................'}</p>
                                             <div className="h-16" />
@@ -4053,16 +4053,16 @@ export default function Home() {
                                             <p>Penata TK. I</p>
                                             {sekolahData.nipBendahara && <p>NIP. {sekolahData.nipBendahara}</p>}
                                           </div>
-                                          <div className="text-center" style={{ width: '30%' }}>
+                                          <div className="text-center">
                                             <p className="font-bold">Diterima oleh :</p>
                                             <p>{toko?.namaToko || '........................'}</p>
                                             <div className="h-16" />
-                                            <p className="font-bold underline">{toko?.direktur || '........................'}</p>
+                                            <p>-</p>
                                             <p>Direktur</p>
                                           </div>
                                         </div>
 
-                                        <div className="text-center mt-4">
+                                        <div className="text-center mt-6">
                                           <p className="font-bold">Menyetujui :</p>
                                           <p>Kepala Sekolah {sekolahData.namaSekolah || '........................'}</p>
                                           <div className="h-16" />
