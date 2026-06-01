@@ -13,14 +13,16 @@ export async function GET() {
     },
   };
 
-  // Test pdfjs-dist import
+  // Test pdf-parse import (pdf-parse v2.4.5 with PDFParse class)
   try {
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    diagnostics.pdfjsDist = "loaded successfully";
-    diagnostics.pdfjsDistGetDocument = typeof pdfjsLib.getDocument;
+    const pdfParseModule = await import("pdf-parse");
+    diagnostics.pdfParse = {
+      loaded: true,
+      hasPDFParse: typeof pdfParseModule.PDFParse === "function",
+      exports: Object.keys(pdfParseModule).filter(k => typeof pdfParseModule[k] === "function" || typeof pdfParseModule[k] === "object"),
+    };
   } catch (e: any) {
-    diagnostics.pdfjsDist = `FAILED: ${e.message}`;
-    diagnostics.pdfjsDistStack = e.stack?.substring(0, 500);
+    diagnostics.pdfParse = { loaded: false, error: e.message, stack: e.stack?.substring(0, 300) };
   }
 
   // Test full text extraction from a blob file
@@ -31,28 +33,45 @@ export async function GET() {
     if (blobs.length > 0) {
       diagnostics.testBlob = blobs[0].pathname;
 
-      // Try to download and parse the blob
+      // Try to download the blob using get() v2 API (returns stream)
       try {
-        const blobData = await get(blobs[0].pathname, { access: "private" });
-        const arrayBuffer = await blobData.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        diagnostics.blobDownloadSize = buffer.length;
+        const result = await get(blobs[0].pathname, { access: "private" });
+        if (!result || result.statusCode !== 200 || !result.stream) {
+          diagnostics.blobDownloadError = `get() returned unexpected result: statusCode=${result?.statusCode}, hasStream=${!!result?.stream}`;
+        } else {
+          // Convert stream to buffer
+          const chunks: Uint8Array[] = [];
+          const reader = result.stream.getReader();
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+          const buffer = Buffer.concat(chunks);
+          diagnostics.blobDownloadSize = buffer.length;
 
-        // Try to extract text with pdfjs-dist
-        try {
-          const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-          const uint8 = new Uint8Array(buffer);
-          const doc = await pdfjsLib.getDocument({ data: uint8 }).promise;
-          diagnostics.pdfPageCount = doc.numPages;
-
-          const page = await doc.getPage(1);
-          const textContent = await page.getTextContent();
-          const text = textContent.items.map((item: any) => item.str).join(" ");
-          diagnostics.pdfTextPreview = text.substring(0, 200);
-          diagnostics.pdfTextLength = text.length;
-        } catch (pdfErr: any) {
-          diagnostics.pdfExtractionError = pdfErr.message;
-          diagnostics.pdfExtractionStack = pdfErr.stack?.substring(0, 500);
+          // Try to extract text with pdf-parse
+          try {
+            const pdfParseModule = await import("pdf-parse");
+            const PDFParse = pdfParseModule.PDFParse;
+            const uint8 = new Uint8Array(buffer);
+            const parser = new PDFParse(uint8, { verbosity: 0 });
+            await parser.load();
+            const textResult = await parser.getText({});
+            diagnostics.pdfPageCount = textResult.pages?.length || 0;
+            if (textResult.pages && textResult.pages.length > 0) {
+              diagnostics.pdfTextPreview = textResult.pages[0].text?.substring(0, 200) || "(empty)";
+              diagnostics.pdfTextLength = textResult.pages[0].text?.length || 0;
+            }
+            diagnostics.pdfExtractionSuccess = true;
+          } catch (pdfErr: any) {
+            diagnostics.pdfExtractionError = pdfErr.message;
+            diagnostics.pdfExtractionStack = pdfErr.stack?.substring(0, 300);
+          }
         }
       } catch (dlErr: any) {
         diagnostics.blobDownloadError = dlErr.message;

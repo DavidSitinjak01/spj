@@ -92,7 +92,6 @@ function writeCache(fileName: string, data: CachedData): void {
 
 /**
  * Import the Vercel Blob SDK dynamically.
- * Includes get() for downloading private blobs with proper authentication.
  */
 async function getBlobModule() {
   const mod = await import('@vercel/blob');
@@ -114,15 +113,36 @@ export async function uploadToBlob(fileName: string, buffer: Buffer, contentType
 }
 
 /**
+ * Helper: Convert a ReadableStream<Uint8Array> to a Buffer.
+ * Used by @vercel/blob v2 get() which returns a stream instead of a Blob.
+ */
+async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
  * Download a file from Vercel Blob storage (private store).
- * Uses the @vercel/blob `get()` function which automatically handles
- * authentication with BLOB_READ_WRITE_TOKEN for private blobs.
+ * Uses the @vercel/blob `get()` function which returns a stream.
+ * In @vercel/blob v2, get() returns { stream, blob, headers } instead of a Blob.
  */
 export async function downloadFromBlob(url: string): Promise<Buffer> {
   const { get } = await getBlobModule();
-  const blob = await get(url, { access: 'private' });
-  const arrayBuffer = await blob.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  const result = await get(url, { access: 'private' });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error(`Failed to download blob: ${url} (status: ${result?.statusCode || 'null'})`);
+  }
+  return streamToBuffer(result.stream);
 }
 
 /**
@@ -131,9 +151,11 @@ export async function downloadFromBlob(url: string): Promise<Buffer> {
  */
 export async function downloadFromBlobByPathname(pathname: string): Promise<Buffer> {
   const { get } = await getBlobModule();
-  const blob = await get(pathname, { access: 'private' });
-  const arrayBuffer = await blob.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  const result = await get(pathname, { access: 'private' });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new Error(`Failed to download blob by pathname: ${pathname} (status: ${result?.statusCode || 'null'})`);
+  }
+  return streamToBuffer(result.stream);
 }
 
 /**
@@ -179,46 +201,48 @@ export async function getBlobUrl(fileName: string): Promise<string | null> {
   return info?.url || null;
 }
 
-// --- PDF text extraction using pdfjs-dist ---
+// --- PDF text extraction using pdf-parse v2.4.5 ---
 
+/**
+ * Extract text from a PDF buffer using pdf-parse (PDFParse class).
+ * This works in both Node.js local and Vercel serverless environments
+ * because pdf-parse includes proper Node.js polyfills (unlike raw pdfjs-dist
+ * which requires browser APIs like DOMMatrix).
+ */
 async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   text: string;
   numpages: number;
   info: Record<string, unknown>;
   perPageText: { page: number; text: string }[];
 }> {
-  // Use pdfjs-dist (Mozilla PDF.js) for reliable text extraction in serverless
-  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  // pdf-parse v2.4.5 exports a PDFParse class
+  // Must use Uint8Array instead of Buffer (pdf-parse v2 requirement)
+  const pdfParseModule = await import('pdf-parse');
+  const PDFParse = pdfParseModule.PDFParse;
   const uint8 = new Uint8Array(buffer);
+  const parser = new PDFParse(uint8, { verbosity: 0 });
+  await parser.load();
 
-  // Disable worker for serverless environments (runs on main thread)
-  // This avoids issues with worker file not being available in serverless
-  const doc = await pdfjsLib.getDocument({
-    data: uint8,
-    useWorkerFetch: false,
-    isEvalSupported: false,
-    useSystemFonts: true,
-  }).promise;
+  // Get text from all pages
+  const result = await parser.getText({});
 
   const perPageText: { page: number; text: string }[] = [];
   let fullText = '';
 
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str)
-      .join(' ');
-    perPageText.push({ page: i, text: pageText });
-    fullText += pageText + '\n';
+  if (result && result.pages) {
+    for (let i = 0; i < result.pages.length; i++) {
+      const pageText = result.pages[i].text || '';
+      perPageText.push({ page: i + 1, text: pageText });
+      fullText += pageText + '\n';
+    }
   }
 
   // Get document metadata
   let info: Record<string, unknown> = {};
   try {
-    const metadata = await doc.getMetadata();
-    if (metadata && metadata.info) {
-      info = metadata.info as Record<string, unknown>;
+    const docInfo = parser.getInfo();
+    if (docInfo) {
+      info = docInfo as Record<string, unknown>;
     }
   } catch {
     // Metadata not available, continue
@@ -226,7 +250,7 @@ async function extractTextWithPdfParse(buffer: Buffer): Promise<{
 
   return {
     text: fullText.trim(),
-    numpages: doc.numPages,
+    numpages: perPageText.length,
     info,
     perPageText,
   };
@@ -274,7 +298,7 @@ export async function processPDFBuffer(fileName: string, buffer: Buffer, filePat
 
 export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
-    // Serverless: download from private blob using get() + pdfjs-dist
+    // Serverless: download from private blob using get() + pdf-parse
     // Use pathname-based download which handles private store authentication automatically
     const pathname = `${BLOB_PREFIX}${fileName}`;
     const buffer = await downloadFromBlobByPathname(pathname);
