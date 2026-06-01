@@ -59,8 +59,9 @@ interface RKASMonth {
 
 interface SPJItem {
   kodeRekening: string; kodeProgram: string; standarKode: string; standarNama: string;
-  uraian: string; anggaran: number; realisasi: number; selisih: number;
+  uraian: string; uraianBKU: string; anggaran: number; realisasi: number; selisih: number;
   persenRealisasi: number; status: 'lengkap' | 'sebagian' | 'belum' | 'lebih';
+  jumlahItem: number;
 }
 interface SPJStandarGroup {
   kode: string; nama: string; anggaran: number; realisasi: number; selisih: number;
@@ -1339,56 +1340,20 @@ export default function Home() {
                           Import file RKAS dan BKU untuk melihat pencocokan Surat Pertanggungjawaban
                         </p>
                       </div>
+                      <div className="flex flex-col sm:flex-row gap-2 justify-center mt-4">
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <ClipboardList className="h-3.5 w-3.5" />
+                          <span>1. Import RKAS (Bulanan & Tahunan)</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Receipt className="h-3.5 w-3.5" />
+                          <span>2. Import BKU per bulan</span>
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
                 ) : (
                   <>
-                    {/* ===== SPJ Summary KPI ===== */}
-                    {(() => {
-                      const src = selectedSpjMonth === -1 ? spjData.tahunan : spjData.bulanan[selectedSpjMonth]
-                      if (!src) return null
-                      return (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
-                            <CardContent className="pt-3 pb-2 px-3">
-                              <div className="flex items-center gap-2 mb-1">
-                                <ClipboardList className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                                <p className="text-[10px] text-muted-foreground">Anggaran (RKAS)</p>
-                              </div>
-                              <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{fmtRp(src.totalAnggaran)}</p>
-                            </CardContent>
-                          </Card>
-                          <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
-                            <CardContent className="pt-3 pb-2 px-3">
-                              <div className="flex items-center gap-2 mb-1">
-                                <Receipt className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                                <p className="text-[10px] text-muted-foreground">Realisasi (BKU)</p>
-                              </div>
-                              <p className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(src.totalRealisasi)}</p>
-                            </CardContent>
-                          </Card>
-                          <Card className={src.totalSelisih >= 0 ? 'border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30' : 'border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-950/30 dark:to-rose-950/30'}>
-                            <CardContent className="pt-3 pb-2 px-3">
-                              <div className="flex items-center gap-2 mb-1">
-                                {src.totalSelisih >= 0 ? <Minus className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /> : <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />}
-                                <p className="text-[10px] text-muted-foreground">{src.totalSelisih >= 0 ? 'Sisa Anggaran' : 'Defisit'}</p>
-                              </div>
-                              <p className={`text-sm font-bold ${src.totalSelisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{fmtRp(Math.abs(src.totalSelisih))}</p>
-                            </CardContent>
-                          </Card>
-                          <Card className="border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30">
-                            <CardContent className="pt-3 pb-2 px-3">
-                              <div className="flex items-center gap-2 mb-1">
-                                <TrendingUp className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-                                <p className="text-[10px] text-muted-foreground">% Pertanggungjawaban</p>
-                              </div>
-                              <p className="text-sm font-bold text-violet-700 dark:text-violet-300">{src.persenRealisasi}%</p>
-                            </CardContent>
-                          </Card>
-                        </div>
-                      )
-                    })()}
-
                     {/* ===== Period Selector ===== */}
                     <Card>
                       <CardContent className="py-2.5 px-3">
@@ -1411,12 +1376,107 @@ export default function Home() {
                               onClick={() => setSelectedSpjMonth(idx)}
                             >
                               <Calendar className="h-3 w-3" /> {MONTH_NAMES[m.bulan] || m.bulan.slice(0,3)} {m.tahun}
+                              {m.persenRealisasi > 0 && (
+                                <span className={`ml-0.5 text-[9px] ${
+                                  m.persenRealisasi >= 95 ? 'text-emerald-600' :
+                                  m.persenRealisasi >= 50 ? 'text-amber-600' : 'text-red-500'
+                                }`}>({m.persenRealisasi}%)</span>
+                              )}
                             </Button>
                           ))}
                           {spjLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
                         </div>
                       </CardContent>
                     </Card>
+
+                    {/* ===== SPJ Summary KPI ===== */}
+                    {(() => {
+                      const src = selectedSpjMonth === -1 ? spjData.tahunan : spjData.bulanan[selectedSpjMonth]
+                      if (!src) return null
+
+                      // Count status distribution
+                      const allItems = src.standarGroups.flatMap(g => g.items)
+                      const statusCounts = {
+                        lengkap: allItems.filter(i => i.status === 'lengkap').length,
+                        sebagian: allItems.filter(i => i.status === 'sebagian').length,
+                        belum: allItems.filter(i => i.status === 'belum').length,
+                        lebih: allItems.filter(i => i.status === 'lebih').length,
+                      }
+
+                      return (
+                        <>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <Card className="border-emerald-200 dark:border-emerald-800 bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
+                              <CardContent className="pt-3 pb-2 px-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <ClipboardList className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                                  <p className="text-[10px] text-muted-foreground">Anggaran (RKAS)</p>
+                                </div>
+                                <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300">{fmtRp(src.totalAnggaran)}</p>
+                              </CardContent>
+                            </Card>
+                            <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-yellow-50 dark:from-amber-950/30 dark:to-yellow-950/30">
+                              <CardContent className="pt-3 pb-2 px-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Receipt className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                                  <p className="text-[10px] text-muted-foreground">Realisasi (BKU)</p>
+                                </div>
+                                <p className="text-sm font-bold text-amber-700 dark:text-amber-300">{fmtRp(src.totalRealisasi)}</p>
+                              </CardContent>
+                            </Card>
+                            <Card className={src.totalSelisih >= 0 ? 'border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30' : 'border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50 to-rose-50 dark:from-red-950/30 dark:to-rose-950/30'}>
+                              <CardContent className="pt-3 pb-2 px-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  {src.totalSelisih >= 0 ? <Minus className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /> : <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />}
+                                  <p className="text-[10px] text-muted-foreground">{src.totalSelisih >= 0 ? 'Sisa Anggaran' : 'Defisit'}</p>
+                                </div>
+                                <p className={`text-sm font-bold ${src.totalSelisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{fmtRp(Math.abs(src.totalSelisih))}</p>
+                              </CardContent>
+                            </Card>
+                            <Card className="border-violet-200 dark:border-violet-800 bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30">
+                              <CardContent className="pt-3 pb-2 px-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <TrendingUp className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
+                                  <p className="text-[10px] text-muted-foreground">% Pertanggungjawaban</p>
+                                </div>
+                                <p className="text-sm font-bold text-violet-700 dark:text-violet-300">{src.persenRealisasi}%</p>
+                              </CardContent>
+                            </Card>
+                          </div>
+
+                          {/* Overall Progress Bar */}
+                          <Card>
+                            <CardContent className="py-3 px-4 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-medium">Tingkat Pertanggungjawaban</span>
+                                <span className="text-xs font-bold">{fmtRp(src.totalRealisasi)} / {fmtRp(src.totalAnggaran)}</span>
+                              </div>
+                              <div className="h-4 bg-muted rounded-full overflow-hidden relative">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    src.persenRealisasi >= 95 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' :
+                                    src.persenRealisasi >= 50 ? 'bg-gradient-to-r from-amber-400 to-amber-500' :
+                                    'bg-gradient-to-r from-red-400 to-red-500'
+                                  }`}
+                                  style={{ width: `${Math.min(src.persenRealisasi, 100)}%` }}
+                                />
+                                <div className="absolute inset-0 flex items-center justify-center">
+                                  <span className="text-[11px] font-bold text-white drop-shadow-sm">{src.persenRealisasi}%</span>
+                                </div>
+                              </div>
+                              {/* Status counts */}
+                              <div className="flex items-center gap-3 text-[10px] flex-wrap">
+                                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Lengkap: {statusCounts.lengkap}</span>
+                                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Sebagian: {statusCounts.sebagian}</span>
+                                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-400" /> Belum: {statusCounts.belum}</span>
+                                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-600" /> Lebih: {statusCounts.lebih}</span>
+                                <span className="text-muted-foreground ml-auto">{allItems.length} pos total</span>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </>
+                      )
+                    })()}
 
                     {/* ===== SPJ Detail Table ===== */}
                     {(() => {
@@ -1430,7 +1490,8 @@ export default function Home() {
                           item.uraian.toLowerCase().includes(spjSearchTerm.toLowerCase()) ||
                           item.kodeRekening.includes(spjSearchTerm) ||
                           item.kodeProgram.includes(spjSearchTerm) ||
-                          item.standarNama.toLowerCase().includes(spjSearchTerm.toLowerCase())
+                          item.standarNama.toLowerCase().includes(spjSearchTerm.toLowerCase()) ||
+                          item.uraianBKU.toLowerCase().includes(spjSearchTerm.toLowerCase())
                         )
                       })).filter(g => g.items.length > 0)
 
@@ -1440,36 +1501,30 @@ export default function Home() {
                           <div className="relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                             <Input
-                              placeholder="Cari uraian, kode rekening, atau standar..."
+                              placeholder="Cari uraian, kode rekening, kode program, atau standar..."
                               value={spjSearchTerm}
                               onChange={e => setSpjSearchTerm(e.target.value)}
                               className="pl-9 h-8 text-xs"
                             />
                           </div>
 
-                          {/* Status Legend */}
-                          <div className="flex items-center gap-4 text-[10px] text-muted-foreground flex-wrap">
-                            <span className="font-medium">Status:</span>
-                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Lengkap (≥95%)</span>
-                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" /> Sebagian (1-94%)</span>
-                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-400" /> Belum (0%)</span>
-                            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-600" /> Lebih (&gt;100%)</span>
-                          </div>
-
                           {/* Per Standar Groups */}
                           {filteredGroups.map(group => {
                             const IconComp = STANDAR_ICONS[group.kode] || FileText
+                            const colorIdx = (['02','03','04','05','06','07','08'].indexOf(group.kode))
+                            const color = CHART_COLORS[colorIdx >= 0 ? colorIdx : 7]
+                            const matchedCount = group.items.filter(i => i.realisasi > 0).length
                             return (
                               <Card key={group.kode}>
                                 <CardHeader className="pb-2">
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
-                                      <div className="h-7 w-7 rounded-md flex items-center justify-center" style={{ backgroundColor: `${CHART_COLORS[(['02','03','04','05','06','07','08'].indexOf(group.kode) >= 0 ? ['02','03','04','05','06','07','08'].indexOf(group.kode) : 7) % CHART_COLORS.length]}20` }}>
-                                        <IconComp className="h-3.5 w-3.5" style={{ color: CHART_COLORS[(['02','03','04','05','06','07','08'].indexOf(group.kode) >= 0 ? ['02','03','04','05','06','07','08'].indexOf(group.kode) : 7) % CHART_COLORS.length] }} />
+                                      <div className="h-8 w-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${color}20` }}>
+                                        <IconComp className="h-4 w-4" style={{ color }} />
                                       </div>
                                       <div>
                                         <CardTitle className="text-xs">{group.nama}</CardTitle>
-                                        <p className="text-[10px] text-muted-foreground">{group.items.length} pos anggaran</p>
+                                        <p className="text-[10px] text-muted-foreground">{group.items.length} pos · {matchedCount} terealisasi</p>
                                       </div>
                                     </div>
                                     <div className="text-right">
@@ -1485,7 +1540,7 @@ export default function Home() {
                                   </div>
                                   {/* Progress bar */}
                                   <div className="mt-2">
-                                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                    <div className="h-2.5 bg-muted rounded-full overflow-hidden">
                                       <div
                                         className={`h-full rounded-full transition-all ${
                                           group.persenRealisasi >= 95 ? 'bg-emerald-500' :
@@ -1497,7 +1552,7 @@ export default function Home() {
                                     </div>
                                     <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-0.5">
                                       <span>{group.persenRealisasi}% terealisasi</span>
-                                      <span>Selisih: {fmtRp(group.selisih)}</span>
+                                      <span>Selisih: {fmtRp(Math.abs(group.selisih))} {group.selisih >= 0 ? '(sisa)' : '(defisit)'}</span>
                                     </div>
                                   </div>
                                 </CardHeader>
@@ -1507,35 +1562,48 @@ export default function Home() {
                                       <thead>
                                         <tr className="border-b">
                                           <th className="text-left py-1.5 px-1 font-medium text-muted-foreground w-6">#</th>
+                                          <th className="text-left py-1.5 px-1 font-medium text-muted-foreground">Kode Program</th>
                                           <th className="text-left py-1.5 px-1 font-medium text-muted-foreground">Kode Rekening</th>
                                           <th className="text-left py-1.5 px-1 font-medium text-muted-foreground">Uraian</th>
                                           <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Anggaran</th>
                                           <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Realisasi</th>
                                           <th className="text-right py-1.5 px-1 font-medium text-muted-foreground">Selisih</th>
-                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-16">%</th>
-                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-8">Status</th>
+                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-14">%</th>
+                                          <th className="text-center py-1.5 px-1 font-medium text-muted-foreground w-20">Status</th>
                                         </tr>
                                       </thead>
                                       <tbody>
                                         {group.items.map((item, idx) => (
-                                          <tr key={idx} className="border-b last:border-0 hover:bg-muted/50">
+                                          <tr key={idx} className={`border-b last:border-0 ${item.status === 'lebih' ? 'bg-rose-50/50 dark:bg-rose-950/20' : item.status === 'lengkap' ? 'bg-emerald-50/30 dark:bg-emerald-950/10' : 'hover:bg-muted/50'}`}>
                                             <td className="py-1.5 px-1 text-muted-foreground">{idx + 1}</td>
+                                            <td className="py-1.5 px-1 font-mono text-[10px] text-muted-foreground" title={item.kodeProgram}>{item.kodeProgram.length > 10 ? item.kodeProgram.slice(0, 10) + '…' : item.kodeProgram}</td>
                                             <td className="py-1.5 px-1 font-mono text-[10px]">{item.kodeRekening}</td>
-                                            <td className="py-1.5 px-1 max-w-[200px] truncate" title={item.uraian}>{item.uraian}</td>
+                                            <td className="py-1.5 px-1 max-w-[180px]">
+                                              <div className="truncate" title={item.uraian}>{item.uraian}</div>
+                                              {item.jumlahItem > 1 && (
+                                                <span className="text-[9px] text-muted-foreground">({item.jumlahItem} sub-item)</span>
+                                              )}
+                                              {item.uraianBKU && item.realisasi > 0 && (
+                                                <div className="text-[9px] text-amber-600 dark:text-amber-400 truncate" title={`BKU: ${item.uraianBKU}`}>
+                                                  BKU: {item.uraianBKU}
+                                                </div>
+                                              )}
+                                            </td>
                                             <td className="py-1.5 px-1 text-right font-medium text-emerald-700 dark:text-emerald-300">{fmtRp(item.anggaran)}</td>
-                                            <td className="py-1.5 px-1 text-right font-medium text-amber-700 dark:text-amber-300">{fmtRp(item.realisasi)}</td>
-                                            <td className={`py-1.5 px-1 text-right font-medium ${item.selisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{fmtRp(item.selisih)}</td>
+                                            <td className="py-1.5 px-1 text-right font-medium text-amber-700 dark:text-amber-300">{item.realisasi > 0 ? fmtRp(item.realisasi) : '-'}</td>
+                                            <td className={`py-1.5 px-1 text-right font-medium ${item.selisih >= 0 ? 'text-blue-700 dark:text-blue-300' : 'text-red-700 dark:text-red-300'}`}>{item.realisasi > 0 ? fmtRp(item.selisih) : '-'}</td>
                                             <td className="py-1.5 px-1 text-center font-medium">{item.persenRealisasi > 0 ? `${item.persenRealisasi}%` : '-'}</td>
                                             <td className="py-1.5 px-1 text-center">
-                                              <span className={`inline-block h-2.5 w-2.5 rounded-full ${
-                                                item.status === 'lengkap' ? 'bg-emerald-500' :
-                                                item.status === 'sebagian' ? 'bg-amber-500' :
-                                                item.status === 'lebih' ? 'bg-rose-600' : 'bg-red-400'
-                                              }`} title={
-                                                item.status === 'lengkap' ? 'Terealisasi lengkap' :
-                                                item.status === 'sebagian' ? 'Terealisasi sebagian' :
-                                                item.status === 'lebih' ? 'Over-realized' : 'Belum terealisasi'
-                                              } />
+                                              <Badge variant="outline" className={`text-[9px] h-4 px-1 ${
+                                                item.status === 'lengkap' ? 'border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300' :
+                                                item.status === 'sebagian' ? 'border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300' :
+                                                item.status === 'lebih' ? 'border-rose-300 text-rose-700 dark:border-rose-700 dark:text-rose-300' :
+                                                'border-red-200 text-red-500 dark:border-red-700 dark:text-red-300'
+                                              }`}>
+                                                {item.status === 'lengkap' ? 'Lengkap' :
+                                                 item.status === 'sebagian' ? 'Sebagian' :
+                                                 item.status === 'lebih' ? 'Lebih' : 'Belum'}
+                                              </Badge>
                                             </td>
                                           </tr>
                                         ))}
@@ -1551,47 +1619,53 @@ export default function Home() {
                           {(() => {
                             const monthData = selectedSpjMonth === -1 ? null : spjData.bulanan[selectedSpjMonth]
                             if (!monthData) return null
+                            const hasUnmatched = monthData.unmatchedBKU.length > 0 || monthData.unmatchedRKAS.length > 0
+                            if (!hasUnmatched) return null
+                            const totalUnmatchedBKU = monthData.unmatchedBKU.reduce((s, u) => s + u.jumlah, 0)
+                            const totalUnmatchedRKAS = monthData.unmatchedRKAS.reduce((s, u) => s + u.jumlah, 0)
                             return (
-                              (monthData.unmatchedBKU.length > 0 || monthData.unmatchedRKAS.length > 0) ? (
-                                <Card className="border-dashed">
-                                  <CardHeader className="pb-2">
-                                    <CardTitle className="text-xs flex items-center gap-2">
-                                      <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
-                                      Pos Tanpa Cocokan
-                                    </CardTitle>
-                                  </CardHeader>
-                                  <CardContent className="space-y-3">
-                                    {monthData.unmatchedBKU.length > 0 && (
-                                      <div>
-                                        <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300 mb-1">Realisasi tanpa anggaran RKAS (BKU):</p>
-                                        <div className="space-y-0.5">
-                                          {monthData.unmatchedBKU.map((u, i) => (
-                                            <div key={i} className="flex items-center gap-2 text-[10px]">
-                                              <code className="font-mono text-muted-foreground">{u.kodeRekening}</code>
-                                              <span className="truncate flex-1">{u.uraian}</span>
-                                              <span className="font-medium text-amber-600">{fmtRp(u.jumlah)}</span>
-                                            </div>
-                                          ))}
-                                        </div>
+                              <Card className="border-dashed">
+                                <CardHeader className="pb-2">
+                                  <CardTitle className="text-xs flex items-center gap-2">
+                                    <AlertCircle className="h-3.5 w-3.5 text-amber-500" />
+                                    Pos Tanpa Cocokan
+                                  </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  {monthData.unmatchedBKU.length > 0 && (
+                                    <div>
+                                      <p className="text-[10px] font-medium text-amber-700 dark:text-amber-300 mb-1">
+                                        Realisasi tanpa anggaran RKAS (BKU): {monthData.unmatchedBKU.length} pos · {fmtRp(totalUnmatchedBKU)}
+                                      </p>
+                                      <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                                        {monthData.unmatchedBKU.map((u, i) => (
+                                          <div key={i} className="flex items-center gap-2 text-[10px]">
+                                            <code className="font-mono text-muted-foreground shrink-0">{u.kodeKegiatan}|{u.kodeRekening}</code>
+                                            <span className="truncate flex-1">{u.uraian}</span>
+                                            <span className="font-medium text-amber-600 shrink-0">{fmtRp(u.jumlah)}</span>
+                                          </div>
+                                        ))}
                                       </div>
-                                    )}
-                                    {monthData.unmatchedRKAS.length > 0 && (
-                                      <div>
-                                        <p className="text-[10px] font-medium text-red-700 dark:text-red-300 mb-1">Anggaran tanpa realisasi BKU (belum dibelanjakan):</p>
-                                        <div className="space-y-0.5 max-h-32 overflow-y-auto">
-                                          {monthData.unmatchedRKAS.map((u, i) => (
-                                            <div key={i} className="flex items-center gap-2 text-[10px]">
-                                              <code className="font-mono text-muted-foreground">{u.kodeRekening}</code>
-                                              <span className="truncate flex-1">{u.uraian}</span>
-                                              <span className="font-medium text-red-600">{fmtRp(u.jumlah)}</span>
-                                            </div>
-                                          ))}
-                                        </div>
+                                    </div>
+                                  )}
+                                  {monthData.unmatchedRKAS.length > 0 && (
+                                    <div>
+                                      <p className="text-[10px] font-medium text-red-700 dark:text-red-300 mb-1">
+                                        Anggaran tanpa realisasi BKU (belum dibelanjakan): {monthData.unmatchedRKAS.length} pos · {fmtRp(totalUnmatchedRKAS)}
+                                      </p>
+                                      <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                                        {monthData.unmatchedRKAS.map((u, i) => (
+                                          <div key={i} className="flex items-center gap-2 text-[10px]">
+                                            <code className="font-mono text-muted-foreground shrink-0">{u.kodeProgram}|{u.kodeRekening}</code>
+                                            <span className="truncate flex-1">{u.uraian}</span>
+                                            <span className="font-medium text-red-600 shrink-0">{fmtRp(u.jumlah)}</span>
+                                          </div>
+                                        ))}
                                       </div>
-                                    )}
-                                  </CardContent>
-                                </Card>
-                              ) : null
+                                    </div>
+                                  )}
+                                </CardContent>
+                              </Card>
                             )
                           })()}
 
