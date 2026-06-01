@@ -51,7 +51,7 @@ interface RKASStandar {
 }
 interface RKASPenerimaanItem { kode: string; nama: string; jumlah: number }
 interface RKASMonth {
-  fileName: string; bulan: string; tahun: string; tipe: 'bulanan' | 'tahunan'; sumberDana: string;
+  fileName: string; judul: string; bulan: string; tahun: string; tipe: 'bulanan' | 'tahunan'; sumberDana: string;
   namaSekolah: string; npsn: string; alamat: string; kabupaten: string; provinsi: string;
   totalPenerimaan: number; totalBelanja: number;
   penerimaan: RKASPenerimaanItem[]; standarList: RKASStandar[]; allItems: RKASItem[];
@@ -589,6 +589,9 @@ export default function Home() {
                     {rkasBulanan.length} bulanan, {rkasTahunan.length} tahunan
                   </span>
                   {rkasLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                  <span className="text-[10px] text-muted-foreground">
+                    Otomatis terdeteksi: judul "Perbulan" → Bulanan, judul "RKAS" → Tahunan
+                  </span>
                 </div>
 
                 {rkasMonths.length === 0 ? (
@@ -599,7 +602,7 @@ export default function Home() {
                       </div>
                       <div>
                         <h3 className="text-sm font-semibold">Belum ada data RKAS</h3>
-                        <p className="text-xs text-muted-foreground mt-1">Import file PDF RKAS Bulanan (per bulan) atau RKAS Tahunan (1 tahun)</p>
+                        <p className="text-xs text-muted-foreground mt-1">Import file PDF RKAS Bulanan (Rincian Kertas Kerja Perbulan) atau RKAS Tahunan (Kertas Kerja RKAS)</p>
                       </div>
                       <Button variant="outline" size="sm" onClick={() => rkasFileInputRef.current?.click()} className="gap-2">
                         <Upload className="h-3.5 w-3.5" /> Import File RKAS
@@ -689,6 +692,7 @@ export default function Home() {
                           </div>
                           <h3 className="text-sm font-semibold">RKAS Bulanan</h3>
                           <Badge variant="secondary" className="text-[10px]">{rkasBulanan.length} bulan</Badge>
+                          <span className="text-[10px] text-muted-foreground italic">Rincian Kertas Kerja Perbulan</span>
                         </div>
                         <div className="space-y-3">
                           {rkasBulanan.map((month) => {
@@ -716,9 +720,10 @@ export default function Home() {
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">
                                       <span className="text-sm font-semibold">{month.bulan.charAt(0) + month.bulan.slice(1).toLowerCase()} {month.tahun}</span>
-                                      <Badge variant="outline" className="text-[10px]">{month.sumberDana}</Badge>
                                       <Badge className="text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-0">Bulanan</Badge>
+                                      {month.sumberDana && <Badge variant="outline" className="text-[10px]">{month.sumberDana}</Badge>}
                                     </div>
+                                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{month.judul}</p>
                                     <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
                                       <span className="text-emerald-600 dark:text-emerald-400">+{fmtRp(month.totalPenerimaan)}</span>
                                       <span className="text-amber-600 dark:text-amber-400">-{fmtRp(month.totalBelanja)}</span>
@@ -826,6 +831,7 @@ export default function Home() {
                           </div>
                           <h3 className="text-sm font-semibold">RKAS Tahunan</h3>
                           <Badge variant="secondary" className="text-[10px]">{rkasTahunan.length} dokumen</Badge>
+                          <span className="text-[10px] text-muted-foreground italic">Kertas Kerja Rencana Kegiatan dan Anggaran Sekolah</span>
                         </div>
                         <div className="space-y-3">
                           {rkasTahunan.map((month) => {
@@ -854,6 +860,7 @@ export default function Home() {
                                       <span className="text-sm font-semibold">Tahunan {month.tahun}</span>
                                       <Badge className="text-[10px] bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 border-0">Tahunan</Badge>
                                     </div>
+                                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{month.judul}</p>
                                     <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
                                       <span className="text-emerald-600 dark:text-emerald-400">+{fmtRp(month.totalPenerimaan)}</span>
                                       <span className="text-amber-600 dark:text-amber-400">-{fmtRp(month.totalBelanja)}</span>

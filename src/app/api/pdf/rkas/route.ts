@@ -34,6 +34,7 @@ interface RKASPenerimaanItem {
 
 interface RKASMonth {
   fileName: string;
+  judul: string;
   bulan: string;
   tahun: string;
   tipe: 'bulanan' | 'tahunan';
@@ -81,8 +82,6 @@ function isRKASFile(fileName: string): boolean {
 }
 
 // Extract the top-level standar code from kodeProgram
-// kodeProgram can be like "02.", "02. 03. 01.", "03. 03. 21.", "07. 12. 01.", etc.
-// The first segment before the first dot is the standar code
 function extractStandarCode(kodeProgram: string): string {
   if (!kodeProgram) return '';
   const cleaned = kodeProgram.replace(/\s/g, '');
@@ -108,11 +107,38 @@ for i, page in enumerate(pdf.pages):
     # Extract header info from first page
     if i == 0:
         lines = text.split('\\n')
+
+        # --- Extract judul (title) from first meaningful lines ---
+        judul_parts = []
+        for line in lines[:5]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Stop at header fields (NPSN, Tahun Anggaran, etc.)
+            if re.search(r'(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan)\\s*:', stripped):
+                break
+            # Skip footer lines
+            if 'Halaman' in stripped and 'dari' in stripped:
+                continue
+            if 'Kertas Kerja' in stripped and ('NPSN' in stripped or 'Halaman' in stripped):
+                continue
+            judul_parts.append(stripped)
+        header_info['judul'] = ' '.join(judul_parts)
+
+        # --- Detect tipe from judul ---
+        judul_upper = header_info.get('judul', '').upper()
+        if 'PERBULAN' in judul_upper or 'BULANAN' in judul_upper:
+            header_info['tipeFromJudul'] = 'bulanan'
+        elif 'TAHUNAN' in judul_upper or ('RKAS' in judul_upper and 'PERBULAN' not in judul_upper):
+            header_info['tipeFromJudul'] = 'tahunan'
+        else:
+            header_info['tipeFromJudul'] = ''
+
         for line in lines:
             # Skip footer lines (contains "Halaman" and "Kertas Kerja")
             if 'Halaman' in line and 'dari' in line:
                 continue
-            if 'Kertas Kerja' in line:
+            if 'Kertas Kerja' in line and 'NPSN' in line:
                 continue
 
             # Bulan
@@ -148,13 +174,11 @@ for i, page in enumerate(pdf.pages):
             prov_match = re.search(r'Provinsi\\s*:\\s*(.+)', line)
             if prov_match:
                 header_info['provinsi'] = prov_match.group(1).strip()
-            # Sumber Dana - handles both "Sumber Dana : BOSP Reguler" and "Sumber Dana BOSP Reguler"
-            # Skip "Sumber Dana dan Alokasi Anggaran" (belanja table header) and "Sumber Dana :" (penerimaan sub-header)
+            # Sumber Dana
             if 'Sumber Dana' in line and 'dan Alokasi' not in line:
                 sd_match = re.search(r'Sumber Dana\\s*:?\\s*(.+)', line)
                 if sd_match:
                     val = sd_match.group(1).strip()
-                    # Skip if empty, just ":", or from table header
                     if val and val != ':' and 'No.' not in val and 'Kode' not in val and 'Penerimaan' not in val:
                         header_info['sumberDana'] = val
 
@@ -186,46 +210,95 @@ for i, page in enumerate(pdf.pages):
                 elif 'TOTAL' in r[0].upper():
                     header_info['totalPenerimaan'] = r[2].strip().replace('.', '')
 
-        # Detect belanja table - has variable columns
-        # Check for "No." and "Urut" in first cell and "Uraian" or "Jumlah" present
+        # Detect belanja table
         elif ('URUT' in first_row_text or 'NO' in first_row_text) and ('JUMLAH' in first_row_text):
             ncols = len(first_row)
+
+            # Determine if this is a bulanan or tahunan table from header
+            all_header_text = ''
+            for hr in table[:3]:
+                all_header_text += ' '.join([c or '' for c in hr]).upper() + ' '
+
+            is_bulanan_table = 'RINCIAN' in all_header_text or 'VOLUME' in all_header_text or 'SATUAN' in all_header_text or 'TARIF' in all_header_text
+            is_tahunan_table = 'SUMBER DANA' in all_header_text or 'ALOKASI' in all_header_text or ('OPERASI' in all_header_text and 'MODAL' in all_header_text)
 
             for row in table[1:]:
                 r = [c or '' for c in row]
 
-                # Skip sub-header rows (like "Volume", "Satuan", "Tarif Harga")
+                # Skip sub-header rows
                 row_text = ' '.join(r).upper()
                 if 'VOLUME' in row_text and 'SATUAN' in row_text:
                     continue
                 if 'BELANJA' in row_text and 'OPERASI' in row_text:
                     continue
-                if 'SUMBER DANA' in row_text:
+                if 'SUMBER DANA' in row_text and 'ALOKASI' in row_text:
                     continue
-                # Skip empty rows
                 if not any(c.strip() for c in r):
                     continue
 
                 no_urut = r[0].strip().rstrip('.')
                 if not no_urut:
                     continue
-                # Skip header-like rows
                 if no_urut.upper() in ['NO', 'URUT']:
                     continue
 
-                # Parse based on column count
-                if ncols <= 8:
-                    # Compact: No.Urut, Kode Rekening, Kode Program, Uraian, Volume, Satuan, Tarif Harga, Jumlah
+                # Parse based on detected table type
+                if is_tahunan_table and ncols >= 10:
+                    # Tahunan RKAS format:
+                    # Cols: No.Urut, Kode Rekening, Kode Kegiatan, Uraian Kegiatan, Jumlah, + allocation cols
+                    # The "jumlah" is the 5th col (index 4)
+                    # After that are BOSP REGULER (Operasi, Modal), BOSP DAERAH, etc.
+                    kp = r[2].strip() if len(r) > 2 else ''
+                    uraian_val = r[3].strip().replace('\\n', ' ') if len(r) > 3 else ''
+                    jumlah_val = r[4].strip() if len(r) > 4 else ''
+
                     belanja_rows.append({
                         'noUrut': no_urut,
                         'kodeRekening': r[1].strip() if len(r) > 1 else '',
-                        'kodeProgram': r[2].strip() if len(r) > 2 else '',
-                        'uraian': r[3].strip().replace('\\n', ' ') if len(r) > 3 else '',
-                        'volume': r[4].strip() if len(r) > 4 else '',
-                        'satuan': r[5].strip() if len(r) > 5 else '',
-                        'tarifHarga': r[6].strip() if len(r) > 6 else '',
-                        'jumlah': r[7].strip() if len(r) > 7 else '',
+                        'kodeProgram': kp,
+                        'uraian': uraian_val,
+                        'volume': '',
+                        'satuan': '',
+                        'tarifHarga': '',
+                        'jumlah': jumlah_val,
                     })
+
+                elif is_bulanan_table and ncols >= 10:
+                    # Bulanan RKAS format with Rincian Perhitungan columns
+                    # kodeProgram can span 2-3 columns, last 4 are volume, satuan, tarifHarga, jumlah
+                    kp_parts = []
+                    uraian_idx = -1
+                    for ci in range(2, ncols - 4):
+                        val = r[ci] if ci < len(r) else ''
+                        prev_val = first_row[ci] if ci < len(first_row) else ''
+                        if prev_val.upper().strip() in ['URAIAN', 'URAIAN KEGIATAN'] or 'URAIAN' in (prev_val or '').upper():
+                            uraian_idx = ci
+                            break
+                        if val.strip():
+                            kp_parts.append(val.strip())
+
+                    if uraian_idx == -1:
+                        kp_parts = [r[ci].strip() for ci in range(2, min(5, ncols - 4)) if r[ci].strip()]
+                        uraian_idx = min(5, ncols - 4)
+
+                    kp = ' '.join(kp_parts).strip()
+                    uraian = r[uraian_idx].strip().replace('\\n', ' ') if uraian_idx < len(r) else ''
+                    vol_idx = ncols - 4
+                    sat_idx = ncols - 3
+                    tarif_idx = ncols - 2
+                    jumlah_idx = ncols - 1
+
+                    belanja_rows.append({
+                        'noUrut': no_urut,
+                        'kodeRekening': r[1].strip() if len(r) > 1 else '',
+                        'kodeProgram': kp,
+                        'uraian': uraian,
+                        'volume': r[vol_idx].strip() if vol_idx < len(r) else '',
+                        'satuan': r[sat_idx].strip() if sat_idx < len(r) else '',
+                        'tarifHarga': r[tarif_idx].strip() if tarif_idx < len(r) else '',
+                        'jumlah': r[jumlah_idx].strip() if jumlah_idx < len(r) else '',
+                    })
+
                 elif ncols == 9:
                     # 9 cols: No.Urut, Kode Rekening, Kode Program (2 cols), Uraian, Volume, Satuan, Tarif Harga, Jumlah
                     kp = (r[2].strip() + ' ' + r[3].strip()).strip()
@@ -239,75 +312,19 @@ for i, page in enumerate(pdf.pages):
                         'tarifHarga': r[7].strip() if len(r) > 7 else '',
                         'jumlah': r[8].strip() if len(r) > 8 else '',
                     })
-                elif ncols >= 10:
-                    # Monthly RKAS format with split Kode Program and/or Sumber Dana columns
-                    # Check if this is monthly format (has Volume/Satuan/Tarif Harga)
-                    # vs full RKAS format (has Sumber Dana allocation columns)
-                    # Monthly: cols 0-5 are noUrut, kodeRekening, kodeProgram(2-3), uraian
-                    #          last 4 are: volume, satuan, tarifHarga, jumlah
-                    # Full RKAS: cols 0-4 are noUrut, kodeRekening, kodeKegiatan, uraian, jumlah
-                    #           cols 5+ are Sumber Dana allocation
 
-                    # Detect by checking if "Rincian Perhitungan" is in header
-                    is_monthly = False
-                    for header_row in table[:3]:
-                        hr_text = ' '.join([c or '' for c in header_row]).upper()
-                        if 'RINCIAN' in hr_text or 'VOLUME' in hr_text or 'SATUAN' in hr_text:
-                            is_monthly = True
-                            break
-
-                    if is_monthly:
-                        # Monthly format: kodeProgram can span 2-3 columns
-                        # Find where "Uraian" column is
-                        # Pattern: last 4 cols = volume, satuan, tarifHarga, jumlah
-                        kp_parts = []
-                        uraian_idx = -1
-                        for ci in range(2, ncols - 4):
-                            val = r[ci] if ci < len(r) else ''
-                            prev_val = first_row[ci] if ci < len(first_row) else ''
-                            # kodeProgram cells have dots and numbers like "02.", "03.", etc.
-                            # uraian cells typically have longer text
-                            if prev_val.upper().strip() in ['URAIAN', 'URAIAN KEGIATAN'] or 'URAIAN' in (prev_val or '').upper():
-                                uraian_idx = ci
-                                break
-                            if val.strip():
-                                kp_parts.append(val.strip())
-
-                        if uraian_idx == -1:
-                            # Fallback: assume 3 kodeProgram cols
-                            kp_parts = [r[ci].strip() for ci in range(2, min(5, ncols - 4)) if r[ci].strip()]
-                            uraian_idx = min(5, ncols - 4)
-
-                        kp = ' '.join(kp_parts).strip()
-                        uraian = r[uraian_idx].strip().replace('\\n', ' ') if uraian_idx < len(r) else ''
-                        vol_idx = ncols - 4
-                        sat_idx = ncols - 3
-                        tarif_idx = ncols - 2
-                        jumlah_idx = ncols - 1
-
-                        belanja_rows.append({
-                            'noUrut': no_urut,
-                            'kodeRekening': r[1].strip() if len(r) > 1 else '',
-                            'kodeProgram': kp,
-                            'uraian': uraian,
-                            'volume': r[vol_idx].strip() if vol_idx < len(r) else '',
-                            'satuan': r[sat_idx].strip() if sat_idx < len(r) else '',
-                            'tarifHarga': r[tarif_idx].strip() if tarif_idx < len(r) else '',
-                            'jumlah': r[jumlah_idx].strip() if jumlah_idx < len(r) else '',
-                        })
-                    else:
-                        # Full RKAS format: noUrut, kodeRekening, kodeKegiatan, uraian, jumlah, + allocation cols
-                        kp = r[2].strip() if len(r) > 2 else ''
-                        belanja_rows.append({
-                            'noUrut': no_urut,
-                            'kodeRekening': r[1].strip() if len(r) > 1 else '',
-                            'kodeProgram': kp,
-                            'uraian': r[3].strip().replace('\\n', ' ') if len(r) > 3 else '',
-                            'volume': '',
-                            'satuan': '',
-                            'tarifHarga': '',
-                            'jumlah': r[4].strip() if len(r) > 4 else '',
-                        })
+                elif ncols <= 8:
+                    # Compact: No.Urut, Kode Rekening, Kode Program, Uraian, Volume, Satuan, Tarif Harga, Jumlah
+                    belanja_rows.append({
+                        'noUrut': no_urut,
+                        'kodeRekening': r[1].strip() if len(r) > 1 else '',
+                        'kodeProgram': r[2].strip() if len(r) > 2 else '',
+                        'uraian': r[3].strip().replace('\\n', ' ') if len(r) > 3 else '',
+                        'volume': r[4].strip() if len(r) > 4 else '',
+                        'satuan': r[5].strip() if len(r) > 5 else '',
+                        'tarifHarga': r[6].strip() if len(r) > 6 else '',
+                        'jumlah': r[7].strip() if len(r) > 7 else '',
+                    })
 
 result = {'header': header_info, 'penerimaan': penerimaan_rows, 'belanja': belanja_rows}
 print(json.dumps(result, ensure_ascii=False))
@@ -362,7 +379,6 @@ function parseRKASFile(fileName: string): RKASMonth | null {
   const totalPenerimaan = parseAmount(header.totalPenerimaan) || penerimaan.reduce((s, p) => s + p.jumlah, 0);
 
   // Parse belanja items - only keep leaf items (those with kodeRekening)
-  // First pass: convert raw data
   const rawItems: RKASItem[] = belanjaRaw
     .filter(r => r.kodeRekening && r.kodeRekening.trim() !== '')
     .map(r => ({
@@ -376,18 +392,12 @@ function parseRKASFile(fileName: string): RKASMonth | null {
       jumlah: parseAmount(r.jumlah),
     }));
 
-  // Second pass: filter out intermediate "rekening header" rows
-  // These are rows that have kodeRekening but are subtotals of subsequent detail rows
-  // A row is intermediate if its uraian does NOT start with a number prefix (like "001.")
-  // AND the next row has the same kodeRekening AND kodeProgram
-  // AND the next row's uraian DOES start with a number prefix
+  // Filter out intermediate "rekening header" rows (subtotals)
   const allItems: RKASItem[] = [];
   for (let idx = 0; idx < rawItems.length; idx++) {
     const item = rawItems[idx];
     const next = idx + 1 < rawItems.length ? rawItems[idx + 1] : null;
     const itemStartsWithNumber = /^\d{3}[.\s]/.test(item.uraian.trim());
-    // Check if this is an intermediate row (rekening header/subtotal)
-    // It's intermediate if it doesn't start with a number and the next row with same keys does
     const isIntermediate = !itemStartsWithNumber
       && next
       && item.kodeRekening === next.kodeRekening
@@ -440,11 +450,25 @@ function parseRKASFile(fileName: string): RKASMonth | null {
   // Calculate total belanja from leaf items
   const totalBelanja = allItems.reduce((s, item) => s + item.jumlah, 0);
 
+  // Determine tipe: use judul-based detection first, fallback to bulan field
   const bulanValue = (header.bulan || '').toUpperCase();
-  const tipe: 'bulanan' | 'tahunan' = bulanValue ? 'bulanan' : 'tahunan';
+  const tipeFromJudul = (header.tipeFromJudul || '') as string;
+  let tipe: 'bulanan' | 'tahunan';
+
+  if (tipeFromJudul === 'bulanan') {
+    tipe = 'bulanan';
+  } else if (tipeFromJudul === 'tahunan') {
+    tipe = 'tahunan';
+  } else {
+    // Fallback: if bulan exists, it's bulanan; otherwise tahunan
+    tipe = bulanValue ? 'bulanan' : 'tahunan';
+  }
+
+  const judul = header.judul || (tipe === 'bulanan' ? 'Rincian Kertas Kerja Perbulan' : 'Kertas Kerja RKAS');
 
   const rkasMonth: RKASMonth = {
     fileName,
+    judul,
     bulan: bulanValue,
     tahun: header.tahun || '',
     tipe,
@@ -475,7 +499,7 @@ function parseRKASFile(fileName: string): RKASMonth | null {
 export async function GET() {
   try {
     if (!fs.existsSync(UPLOAD_DIR)) {
-      return NextResponse.json({ months: [], files: [] });
+      return NextResponse.json({ months: [], bulanan: [], tahunan: [], files: [] });
     }
 
     const files = fs.readdirSync(UPLOAD_DIR)
@@ -489,14 +513,12 @@ export async function GET() {
         if (data) months.push(data);
       } catch (err) {
         console.error(`Error parsing RKAS file ${file}:`, err);
-        // Skip this file, don't crash the whole list
       }
     }
 
-    // Sort: tahunan first, then bulanan by month order, then year
+    // Sort: bulanan by month order first, then tahunan after, both by year
     months.sort((a, b) => {
       if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-      // Tahunan comes after all months of the same year
       if (a.tipe !== b.tipe) return a.tipe === 'tahunan' ? 1 : -1;
       const ma = MONTH_ORDER.indexOf(a.bulan);
       const mb = MONTH_ORDER.indexOf(b.bulan);
@@ -509,7 +531,7 @@ export async function GET() {
     const seen = new Map<string, RKASMonth>();
     const toDelete: string[] = [];
     for (const m of months) {
-      const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `${m.bulan}_${m.tahun}`;
+      const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `BULANAN_${m.bulan}_${m.tahun}`;
       if (seen.has(key)) {
         toDelete.push(m.fileName);
       } else {
@@ -555,31 +577,29 @@ export async function POST(request: Request) {
     // Deduplicate: remove other RKAS files with the same key
     // Bulanan: dedup by bulan+tahun, Tahunan: dedup by tahun only
     let replacedFile: string | null = null;
-    if (data.tahun) {
-      const existingFiles = fs.readdirSync(UPLOAD_DIR)
-        .filter(f => isRKASFile(f) && f !== file.name);
-      for (const existing of existingFiles) {
-        try {
-          const existingData = parseRKASFile(existing);
-          if (!existingData) continue;
-          const isDuplicate = data.tipe === 'tahunan'
-            ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
-            : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
-          if (isDuplicate) {
-            replacedFile = existing;
-            const oldPath = path.join(UPLOAD_DIR, existing);
-            const oldCache = getCacheKey(existing);
-            try { fs.unlinkSync(oldPath); } catch {}
-            try { fs.unlinkSync(oldCache); } catch {}
-          }
-        } catch {}
-      }
-      // Invalidate cache for new file so next GET parses fresh
-      const newCache = getCacheKey(file.name);
-      try { fs.unlinkSync(newCache); } catch {}
+    const existingFiles = fs.readdirSync(UPLOAD_DIR)
+      .filter(f => isRKASFile(f) && f !== file.name);
+    for (const existing of existingFiles) {
+      try {
+        const existingData = parseRKASFile(existing);
+        if (!existingData) continue;
+        const isDuplicate = data.tipe === 'tahunan'
+          ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
+          : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
+        if (isDuplicate) {
+          replacedFile = existing;
+          const oldPath = path.join(UPLOAD_DIR, existing);
+          const oldCache = getCacheKey(existing);
+          try { fs.unlinkSync(oldPath); } catch {}
+          try { fs.unlinkSync(oldCache); } catch {}
+        }
+      } catch {}
     }
+    // Invalidate cache for new file so next GET parses fresh
+    const newCache = getCacheKey(file.name);
+    try { fs.unlinkSync(newCache); } catch {}
 
-    return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe });
+    return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
   } catch (error: any) {
     console.error('RKAS upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -596,12 +616,9 @@ export async function DELETE(request: Request) {
     const filePath = path.join(UPLOAD_DIR, fileName);
     const cachePath = getCacheKey(fileName);
 
-    // Delete the file
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
-
-    // Delete the cache
     if (fs.existsSync(cachePath)) {
       fs.unlinkSync(cachePath);
     }
