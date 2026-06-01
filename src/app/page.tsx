@@ -183,7 +183,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [chatPanelOpen, setChatPanelOpen] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [serverlessMode, setServerlessMode] = useState(false)
+
   const [pageInputValue, setPageInputValue] = useState('1')
   const [imageLoaded, setImageLoaded] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -264,10 +264,6 @@ export default function Home() {
     try {
       // First check what PDFs are available
       const listRes = await fetch('/api/pdf/info')
-      if (await checkServerlessResponse(listRes)) {
-        setLoading(false)
-        return
-      }
       if (listRes.ok) {
         const listData = await listRes.json()
         const files: string[] = listData.files || []
@@ -314,7 +310,6 @@ export default function Home() {
     try {
       const formData = new FormData(); formData.append('file', file)
       const res = await fetch('/api/pdf/upload', { method: 'POST', body: formData })
-      if (await checkServerlessResponse(res)) { setError('Fitur PDF tidak tersedia di deployment serverless.'); return }
       if (!res.ok) throw new Error('Gagal mengunggah PDF')
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100); setChatMessages([]); setSummary(null); setBudgetData(null)
@@ -361,7 +356,6 @@ export default function Home() {
     setBkuLoading(true)
     try {
       const res = await fetch('/api/pdf/bku')
-      if (await checkServerlessResponse(res)) { setBkuLoading(false); return }
       if (res.ok) { const data = await res.json(); setBkuMonths(data.months || []) }
     } catch {} finally { setBkuLoading(false) }
   }
@@ -373,7 +367,6 @@ export default function Home() {
       for (let i = 0; i < files.length; i++) {
         const formData = new FormData(); formData.append('file', files[i])
         const res = await fetch('/api/pdf/bku', { method: 'POST', body: formData })
-        if (await checkServerlessResponse(res)) break
         if (res.ok) {
           const result = await res.json()
           if (result.replaced) {
@@ -391,7 +384,6 @@ export default function Home() {
     setRkasLoading(true)
     try {
       const res = await fetch('/api/pdf/rkas')
-      if (await checkServerlessResponse(res)) { setRkasLoading(false); return }
       if (res.ok) { const data = await res.json(); setRkasMonths(data.months || []) }
     } catch {} finally { setRkasLoading(false) }
   }
@@ -402,14 +394,7 @@ export default function Home() {
     setTimeout(() => setToastMessages(prev => prev.filter(t => t.id !== id)), 5000)
   }, [])
 
-  // Helper: check if an API response indicates serverless environment
-  const checkServerlessResponse = useCallback(async (res: Response): Promise<boolean> => {
-    if (res.status === 501) {
-      setServerlessMode(true)
-      return true
-    }
-    return false
-  }, [])
+
 
   const handleRKASUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files; if (!files || files.length === 0) return
@@ -418,7 +403,6 @@ export default function Home() {
       for (let i = 0; i < files.length; i++) {
         const formData = new FormData(); formData.append('file', files[i])
         const res = await fetch('/api/pdf/rkas', { method: 'POST', body: formData })
-        if (await checkServerlessResponse(res)) break
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
           setError(err.error || 'Gagal mengimpor file RKAS')
@@ -455,7 +439,6 @@ export default function Home() {
     setBkuPajakLoading(true)
     try {
       const res = await fetch('/api/pdf/bku-pajak')
-      if (await checkServerlessResponse(res)) { setBkuPajakLoading(false); return }
       if (res.ok) { const data = await res.json(); setBkuPajakMonths(data.months || []) }
     } catch {} finally { setBkuPajakLoading(false) }
   }
@@ -467,7 +450,6 @@ export default function Home() {
       for (let i = 0; i < files.length; i++) {
         const formData = new FormData(); formData.append('file', files[i])
         const res = await fetch('/api/pdf/bku-pajak', { method: 'POST', body: formData })
-        if (await checkServerlessResponse(res)) break
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
           setError(err.error || 'Gagal mengimpor file BKU Pajak')
@@ -495,7 +477,6 @@ export default function Home() {
     setSpjLoading(true)
     try {
       const res = await fetch('/api/pdf/spj')
-      if (await checkServerlessResponse(res)) { setSpjLoading(false); return }
       if (res.ok) { const data = await res.json(); setSpjData(data) }
     } catch {} finally { setSpjLoading(false) }
   }
@@ -710,7 +691,6 @@ export default function Home() {
     setBpuSyncing(true)
     try {
       const res = await fetch('/api/master/bpu', { method: 'PATCH' })
-      if (await checkServerlessResponse(res)) { setBpuSyncing(false); return }
       if (res.ok) {
         const data = await res.json()
         addToast(`BPU disinkronkan: ${data.summary?.created || 0} baru, ${data.summary?.updated || 0} diperbarui`, 'success')
@@ -753,7 +733,6 @@ export default function Home() {
     setBnuSyncing(true)
     try {
       const res = await fetch('/api/master/bnu', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'sync'}) })
-      if (await checkServerlessResponse(res)) { setBnuSyncing(false); return }
       if (res.ok) {
         const data = await res.json()
         addToast(`BNU disinkronkan: ${data.synced || 0} data`, 'success')
@@ -1017,17 +996,6 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Serverless Mode Banner */}
-      {serverlessMode && (
-        <div className="bg-amber-50 border-b border-amber-200 dark:bg-amber-950/80 dark:border-amber-800">
-          <div className="max-w-screen-2xl mx-auto px-4 py-2 flex items-center gap-2 text-sm text-amber-800 dark:text-amber-200">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>Mode Serverless:</strong> Fitur PDF (upload, parsing, RKAS, BKU, SPJ) tidak tersedia di deployment ini. Gunakan versi lokal untuk fitur lengkap.
-            </span>
-          </div>
-        </div>
-      )}
 
       <main className="flex-1 flex overflow-hidden">
         {/* Left Content */}

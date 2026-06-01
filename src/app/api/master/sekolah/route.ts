@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { isServerless } from '@/lib/serverless';
+import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { parseBKUPajakFromText } from '@/lib/pdf-text-parser';
 import fs from 'fs';
 import path from 'path';
 
@@ -50,8 +52,9 @@ interface BKUPajakCachedData {
 /**
  * Read school data from BKU Pajak cache files (.pdf-cache/*.bku-pajak.json)
  * Returns merged/first available school info from the cached BKU Pajak files.
+ * Works in both local and serverless modes.
  */
-function readSchoolFromBKUCache(): {
+function readSchoolFromBKUCacheLocal(): {
   namaSekolah: string;
   npsn: string;
   alamat: string;
@@ -69,9 +72,6 @@ function readSchoolFromBKUCache(): {
     kepalaSekolah: '',
     bendahara: '',
   };
-
-  // Skip fs operations on serverless (Vercel)
-  if (isServerless()) return result;
 
   try {
     if (!fs.existsSync(CACHE_DIR)) return result;
@@ -121,6 +121,76 @@ function readSchoolFromBKUCache(): {
   return result;
 }
 
+/**
+ * Read school data from BKU Pajak PDFs in blob storage (serverless mode).
+ * Processes each BKU Pajak PDF using processPDF + parseBKUPajakFromText.
+ */
+async function readSchoolFromBKUCacheServerless(): Promise<{
+  namaSekolah: string;
+  npsn: string;
+  alamat: string;
+  kabupaten: string;
+  provinsi: string;
+  kepalaSekolah: string;
+  bendahara: string;
+}> {
+  const result = {
+    namaSekolah: '',
+    npsn: '',
+    alamat: '',
+    kabupaten: '',
+    provinsi: '',
+    kepalaSekolah: '',
+    bendahara: '',
+  };
+
+  try {
+    const allFiles = await getPDFFiles();
+    const bkuPajakFiles = allFiles.filter(f =>
+      f.toLowerCase().includes('pajak') && f.toLowerCase().endsWith('.pdf')
+    );
+
+    for (const file of bkuPajakFiles) {
+      try {
+        const info = await processPDF(file);
+        const fullText = info.extractedText.map(p => p.text).join('\n');
+        const data = parseBKUPajakFromText(fullText, file);
+
+        if (data) {
+          // Use first non-empty value found across all files
+          if (!result.namaSekolah && data.namaSekolah) {
+            result.namaSekolah = data.namaSekolah;
+          }
+          if (!result.npsn && data.npsn) {
+            result.npsn = data.npsn;
+          }
+          if (!result.alamat && data.alamat) {
+            result.alamat = data.alamat;
+          }
+          if (!result.kabupaten && data.kabupaten) {
+            result.kabupaten = data.kabupaten;
+          }
+          if (!result.provinsi && data.provinsi) {
+            result.provinsi = data.provinsi;
+          }
+          if (!result.kepalaSekolah && data.kepalaSekolah) {
+            result.kepalaSekolah = data.kepalaSekolah;
+          }
+          if (!result.bendahara && data.bendahara) {
+            result.bendahara = data.bendahara;
+          }
+        }
+      } catch (err) {
+        console.error(`Error reading BKU Pajak file ${file} (serverless):`, err);
+      }
+    }
+  } catch (error) {
+    console.error('Error reading BKU Pajak from blob:', error);
+  }
+
+  return result;
+}
+
 // GET: Retrieve the single DataSekolah record
 // If none exists, return a default empty record (no auto-creation)
 // Query param ?initFromBKU=true will merge BKU Pajak cached data into the default
@@ -140,8 +210,10 @@ export async function GET(request: Request) {
     let data = { ...defaultDataSekolah };
 
     if (initFromBKU) {
-      // Attempt to populate from BKU Pajak cache files
-      const bkuData = readSchoolFromBKUCache();
+      // Attempt to populate from BKU Pajak cached data (dual-mode)
+      const bkuData = isServerless()
+        ? await readSchoolFromBKUCacheServerless()
+        : readSchoolFromBKUCacheLocal();
       data = {
         ...data,
         ...bkuData,

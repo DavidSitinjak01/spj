@@ -1,32 +1,33 @@
 import { NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
+import { uploadToBlob, deleteFromBlob, getBlobInfo, downloadFromBlob } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload', 'spj-docs');
 const CACHE_FILE = path.join(process.cwd(), '.pdf-cache', 'spj-docs.json');
+const SPJ_DOCS_BLOB_PREFIX = 'spj-docs/';
+const SPJ_DOCS_META_BLOB_KEY = 'spj-docs/metadata.json';
 
-try { if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
-try { if (!fs.existsSync(path.dirname(CACHE_FILE))) fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true }); } catch {}
+if (!isServerless()) {
+  try { if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch {}
+  try { if (!fs.existsSync(path.dirname(CACHE_FILE))) fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true }); } catch {}
+}
 
 // --- Types ---
 export type SPJDocType = 'surat-pesanan' | 'surat-balasan' | 'bast' | 'dokumen-perencanaan' | 'surat-hasil-pemeriksaan';
 
-// Each document is linked to a specific spending item (from RKAS+BKU matching)
 export interface SPJDocument {
   id: string;
   type: SPJDocType;
   fileName: string;
   originalName: string;
-  // Link to spending item
-  itemKey: string;        // compositeKey: normalizeKode(kodeProgram)|normalizeKode(kodeRekening)
+  itemKey: string;
   kodeRekening: string;
   kodeProgram: string;
-  uraian: string;          // description of the spending item
-  // Period
+  uraian: string;
   bulan: string;
   tahun: string;
-  // Metadata
   deskripsi: string;
   tanggalUpload: string;
   fileSize: number;
@@ -42,7 +43,8 @@ const DOC_TYPE_LABELS: Record<SPJDocType, string> = {
 
 const ALL_DOC_TYPES = Object.keys(DOC_TYPE_LABELS) as SPJDocType[];
 
-function loadDocs(): SPJDocument[] {
+// --- Local mode: file-based metadata ---
+function loadDocsLocal(): SPJDocument[] {
   try {
     if (fs.existsSync(CACHE_FILE)) {
       return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
@@ -51,15 +53,48 @@ function loadDocs(): SPJDocument[] {
   return [];
 }
 
-function saveDocs(docs: SPJDocument[]) {
+function saveDocsLocal(docs: SPJDocument[]) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(docs, null, 2), 'utf-8');
+}
+
+// --- Serverless mode: blob-based metadata ---
+async function loadDocsServerless(): Promise<SPJDocument[]> {
+  try {
+    const metaInfo = await getBlobInfo(SPJ_DOCS_META_BLOB_KEY);
+    if (!metaInfo) return [];
+    const buffer = await downloadFromBlob(metaInfo.url);
+    return JSON.parse(buffer.toString('utf-8'));
+  } catch {
+    return [];
+  }
+}
+
+async function saveDocsServerless(docs: SPJDocument[]) {
+  try {
+    const buffer = Buffer.from(JSON.stringify(docs, null, 2), 'utf-8');
+    await uploadToBlob(SPJ_DOCS_META_BLOB_KEY, buffer);
+  } catch (err) {
+    console.error('Failed to save SPJ docs metadata to blob:', err);
+  }
+}
+
+// --- Unified load/save ---
+async function loadDocs(): Promise<SPJDocument[]> {
+  return isServerless() ? await loadDocsServerless() : loadDocsLocal();
+}
+
+async function saveDocs(docs: SPJDocument[]) {
+  if (isServerless()) {
+    await saveDocsServerless(docs);
+  } else {
+    saveDocsLocal(docs);
+  }
 }
 
 function generateId(): string {
   return `spj-doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// Build completeness map: itemKey -> { docType: doc }
 function buildCompletenessMap(docs: SPJDocument[]): Record<string, Record<SPJDocType, SPJDocument | null>> {
   const map: Record<string, Record<SPJDocType, SPJDocument | null>> = {};
   for (const doc of docs) {
@@ -76,9 +111,6 @@ function buildCompletenessMap(docs: SPJDocument[]): Record<string, Record<SPJDoc
 
 // --- GET: List all SPJ documents with completeness info ---
 export async function GET(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('SPJ Dokumen');
-  }
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') as SPJDocType | null;
@@ -86,7 +118,7 @@ export async function GET(request: Request) {
     const tahun = searchParams.get('tahun');
     const itemKey = searchParams.get('itemKey');
 
-    let docs = loadDocs();
+    let docs = await loadDocs();
 
     // Filter
     if (type) docs = docs.filter(d => d.type === type);
@@ -98,7 +130,7 @@ export async function GET(request: Request) {
     docs.sort((a, b) => new Date(b.tanggalUpload).getTime() - new Date(a.tanggalUpload).getTime());
 
     // Build completeness map from ALL docs (not filtered)
-    const allDocs = loadDocs();
+    const allDocs = await loadDocs();
     const completenessMap = buildCompletenessMap(allDocs);
 
     // Summary per type
@@ -133,9 +165,6 @@ export async function GET(request: Request) {
 
 // --- POST: Upload SPJ document linked to a spending item ---
 export async function POST(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('SPJ Dokumen');
-  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
@@ -162,24 +191,36 @@ export async function POST(request: Request) {
     const id = generateId();
     const ext = path.extname(file.name) || '.pdf';
     const safeName = `${id}${ext}`;
-    const filePath = path.join(UPLOAD_DIR, safeName);
 
     // Save file
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    fs.writeFileSync(filePath, buffer);
+
+    if (isServerless()) {
+      // Serverless: upload to blob
+      const blobFileName = `${SPJ_DOCS_BLOB_PREFIX}${safeName}`;
+      await uploadToBlob(blobFileName, buffer);
+    } else {
+      // Local: save to upload dir
+      const filePath = path.join(UPLOAD_DIR, safeName);
+      fs.writeFileSync(filePath, buffer);
+    }
 
     // Check for duplicate (same type + itemKey) — one doc per type per item
-    const docs = loadDocs();
+    const docs = await loadDocs();
     const duplicateIdx = docs.findIndex(d => d.type === type && d.itemKey === itemKey);
 
     let replaced = false;
     if (duplicateIdx >= 0) {
       // Delete old file
       const oldDoc = docs[duplicateIdx];
-      const oldPath = path.join(UPLOAD_DIR, oldDoc.fileName);
-      if (fs.existsSync(oldPath)) {
-        try { fs.unlinkSync(oldPath); } catch {}
+      if (isServerless()) {
+        try { await deleteFromBlob(`${SPJ_DOCS_BLOB_PREFIX}${oldDoc.fileName}`); } catch {}
+      } else {
+        const oldPath = path.join(UPLOAD_DIR, oldDoc.fileName);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch {}
+        }
       }
       // Replace with new
       docs[duplicateIdx] = {
@@ -212,7 +253,7 @@ export async function POST(request: Request) {
       });
     }
 
-    saveDocs(docs);
+    await saveDocs(docs);
 
     return NextResponse.json({
       success: true,
@@ -227,14 +268,11 @@ export async function POST(request: Request) {
 
 // --- DELETE: Remove SPJ document ---
 export async function DELETE(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('SPJ Dokumen');
-  }
   try {
     const body = await request.json();
     const { id, fileName } = body;
 
-    const docs = loadDocs();
+    const docs = await loadDocs();
     const idx = docs.findIndex(d => d.id === id || d.fileName === fileName);
     if (idx < 0) {
       return NextResponse.json({ error: 'Dokumen tidak ditemukan' }, { status: 404 });
@@ -243,13 +281,17 @@ export async function DELETE(request: Request) {
     const doc = docs[idx];
 
     // Delete file
-    const filePath = path.join(UPLOAD_DIR, doc.fileName);
-    if (fs.existsSync(filePath)) {
-      try { fs.unlinkSync(filePath); } catch {}
+    if (isServerless()) {
+      try { await deleteFromBlob(`${SPJ_DOCS_BLOB_PREFIX}${doc.fileName}`); } catch {}
+    } else {
+      const filePath = path.join(UPLOAD_DIR, doc.fileName);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch {}
+      }
     }
 
     docs.splice(idx, 1);
-    saveDocs(docs);
+    await saveDocs(docs);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

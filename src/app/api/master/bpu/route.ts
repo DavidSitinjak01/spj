@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
+import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { parseBKUFromText } from '@/lib/pdf-text-parser';
 import fs from 'fs';
 import path from 'path';
 
@@ -62,6 +64,49 @@ interface BKUCacheData {
     tahun: string;
     transactions: BKUTransaction[];
   };
+}
+
+// ─── Load BKU data from local cache or from blob ────────────────────────────────
+
+function loadBKUCacheLocal(): BKUCacheData[] {
+  const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+  if (!fs.existsSync(CACHE_DIR)) return [];
+  const cacheFiles = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.bku.json'));
+  const results: BKUCacheData[] = [];
+  for (const cf of cacheFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, cf), 'utf-8'));
+      if (data?.data) results.push(data);
+    } catch {}
+  }
+  return results;
+}
+
+async function loadBKUCacheServerless(): Promise<BKUCacheData[]> {
+  try {
+    const allFiles = await getPDFFiles();
+    const bkuFiles = allFiles.filter(f =>
+      f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.toLowerCase().endsWith('.pdf')
+    );
+
+    const results: BKUCacheData[] = [];
+    for (const file of bkuFiles) {
+      try {
+        const info = await processPDF(file);
+        const fullText = info.extractedText.map(p => p.text).join('\n');
+        const data = parseBKUFromText(fullText, file);
+        if (data && data.transactions.length > 0) {
+          results.push({ data });
+        }
+      } catch (err) {
+        console.error(`Failed to load BKU cache for ${file} (serverless):`, err);
+      }
+    }
+    return results;
+  } catch (err) {
+    console.error('Failed to load BKU cache (serverless):', err);
+    return [];
+  }
 }
 
 // ─── GET: List all BPUs with items, toko, and auto nomor surat ──────────────────
@@ -256,24 +301,13 @@ export async function DELETE(request: Request) {
 // ─── PATCH: Sync BPU data from BKU cache files ─────────────────────────────────
 
 export async function PATCH() {
-  if (isServerless()) {
-    return serverlessErrorResponse('Sync BPU');
-  }
   try {
-    const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+    // Load BKU data (dual-mode)
+    const cacheDataList = isServerless()
+      ? await loadBKUCacheServerless()
+      : loadBKUCacheLocal();
 
-    // Check if cache directory exists
-    if (!fs.existsSync(CACHE_DIR)) {
-      return NextResponse.json({
-        data: [],
-        message: 'No BKU cache directory found',
-      });
-    }
-
-    // Read all .bku.json files
-    const cacheFiles = fs.readdirSync(CACHE_DIR).filter((f) => f.endsWith('.bku.json'));
-
-    if (cacheFiles.length === 0) {
+    if (cacheDataList.length === 0) {
       return NextResponse.json({
         data: [],
         message: 'No BKU cache files found',
@@ -291,12 +325,8 @@ export async function PATCH() {
       }
     > = {};
 
-    for (const cacheFile of cacheFiles) {
+    for (const cacheData of cacheDataList) {
       try {
-        const cachePath = path.join(CACHE_DIR, cacheFile);
-        const raw = fs.readFileSync(cachePath, 'utf-8');
-        const cacheData: BKUCacheData = JSON.parse(raw);
-
         if (!cacheData.data?.transactions) continue;
 
         const { transactions, fileName, bulan, tahun } = cacheData.data;
@@ -316,7 +346,7 @@ export async function PATCH() {
           }
         }
       } catch (err) {
-        console.error(`Failed to parse BKU cache file ${cacheFile}:`, err);
+        console.error(`Failed to parse BKU cache data:`, err);
         continue;
       }
     }
@@ -369,14 +399,9 @@ export async function PATCH() {
         });
 
         if (existingBPU) {
-          // Update: replace items, keep user-edited fields (noPesanan, tokoId, hargaToko2, volume, satuan, tarifHarga)
-          // For items, we need to merge: keep user-edited fields on existing items, add new items, remove items not in BKU
-
-          // Delete all existing items first
+          // Update: replace items, keep user-edited fields
           await db.bPItem.deleteMany({ where: { bpuId: existingBPU.id } });
 
-          // Create new items from BKU data
-          // Try to match by uraian to preserve user-edited fields
           const existingItemMap = new Map(
             existingBPU.items.map((item) => [item.uraian.trim().toLowerCase(), item])
           );

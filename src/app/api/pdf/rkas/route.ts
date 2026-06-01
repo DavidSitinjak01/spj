@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
-import { processPDF, getPDFFiles, uploadToBlob, downloadFromBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
+import { processPDF, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -639,7 +639,7 @@ async function parseRKASFile(fileName: string): Promise<RKASMonth | null> {
     if (!blobInfo) return null;
 
     try {
-      const buffer = await downloadFromBlob(blobInfo.url);
+      // processPDF handles downloading from blob internally on serverless
       const info = await processPDF(fileName);
       const fullText = info.extractedText.map(p => p.text).join('\n');
       return parseRKASFromText(fullText, fileName);

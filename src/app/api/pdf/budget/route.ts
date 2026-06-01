@@ -1,42 +1,44 @@
 import { NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { processPDF } from '@/lib/pdf-processor';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
 
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+if (!isServerless()) {
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+}
 
 function getBudgetCachePath(fileName: string): string {
   return path.join(CACHE_DIR, `${fileName}.budget.json`);
 }
 
 function getFileModTime(fileName: string): number {
+  if (isServerless()) return 0;
   try { return fs.statSync(path.join(process.cwd(), 'upload', fileName)).mtimeMs; } catch { return 0; }
 }
 
 export async function POST(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('Budget');
-  }
   try {
     const { fileName } = await request.json();
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
 
-    // Check cache first
-    const cachePath = getBudgetCachePath(fileName);
-    const fileModTime = getFileModTime(fileName);
-    try {
-      if (fs.existsSync(cachePath)) {
-        const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
-        if (cached.fileModifiedAt === fileModTime && cached.data) {
-          return NextResponse.json({ data: cached.data, cached: true });
+    // Check cache first (local only)
+    if (!isServerless()) {
+      const cachePath = getBudgetCachePath(fileName);
+      const fileModTime = getFileModTime(fileName);
+      try {
+        if (fs.existsSync(cachePath)) {
+          const cached = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+          if (cached.fileModifiedAt === fileModTime && cached.data) {
+            return NextResponse.json({ data: cached.data, cached: true });
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
-    const info = processPDF(fileName);
+    const info = await processPDF(fileName);
     const fullText = info.extractedText
       .map(p => `--- Halaman ${p.page} ---\n${p.text}`)
       .join('\n\n');
@@ -100,10 +102,14 @@ Berikan HANYA JSON tanpa penjelasan. Semua angka numerik tanpa pemisah ribuan.`
       budgetData = { error: 'Failed to parse', raw: reply };
     }
 
-    // Save to cache
-    try {
-      fs.writeFileSync(cachePath, JSON.stringify({ data: budgetData, fileModifiedAt: fileModTime, cachedAt: Date.now() }));
-    } catch {}
+    // Save to cache (local only)
+    if (!isServerless()) {
+      try {
+        const cachePath = getBudgetCachePath(fileName);
+        const fileModTime = getFileModTime(fileName);
+        fs.writeFileSync(cachePath, JSON.stringify({ data: budgetData, fileModifiedAt: fileModTime, cachedAt: Date.now() }));
+      } catch {}
+    }
 
     return NextResponse.json({ data: budgetData });
   } catch (error: any) {

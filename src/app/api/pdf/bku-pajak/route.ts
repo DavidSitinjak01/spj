@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
+import { processPDF, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+if (!isServerless()) {
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+}
 
 // --- Interfaces ---
 interface BKUPajakTransaction {
@@ -64,6 +67,7 @@ function getCacheKey(fileName: string): string {
 }
 
 function getFileModTime(fileName: string): number {
+  if (isServerless()) return 0;
   try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch { return 0; }
 }
 
@@ -79,7 +83,237 @@ function isBKUPajakFile(fileName: string): boolean {
   return lower.endsWith('.pdf') && (lower.includes('pajak') || lower.includes('bku-pajak'));
 }
 
-// --- Python PDF Parser ---
+// --- Serverless: Parse BKU Pajak from extracted text using regex ---
+function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | null {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // --- Extract header info ---
+  const headerInfo: Record<string, string> = {};
+
+  for (const line of lines) {
+    // Bulan
+    const bulanMatch = line.match(/BULAN\s*:\s*(\w+)/i);
+    if (bulanMatch) headerInfo.bulan = bulanMatch[1];
+
+    // Tahun
+    const tahunMatch = line.match(/TAHUN\s*:\s*(\d{4})/i);
+    if (tahunMatch) headerInfo.tahun = tahunMatch[1];
+
+    // "BULAN : Januari 2026" pattern
+    const bulanTahun = line.match(/BULAN\s*:\s*(\w+)\s+(\d{4})/i);
+    if (bulanTahun) {
+      headerInfo.bulan = bulanTahun[1];
+      headerInfo.tahun = bulanTahun[2];
+    }
+
+    // NPSN
+    const npsnMatch = line.match(/NPSN\s*:\s*(\d+)/i);
+    if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
+
+    // Nama Sekolah
+    const sekolahMatch = line.match(/Nama Sekolah\s*:\s*(.+)/i);
+    if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+
+    // Desa/Kecamatan -> alamat
+    const alamatMatch = line.match(/Desa\/Kecamatan\s*:\s*(.+)/i);
+    if (alamatMatch) headerInfo.alamat = alamatMatch[1].trim();
+
+    // Kabupaten
+    const kabMatch = line.match(/Kabupaten\s*\/?\s*Kota\s*:\s*(.+)/i);
+    if (kabMatch) headerInfo.kabupaten = kabMatch[1].trim();
+
+    // Provinsi
+    const provMatch = line.match(/Provinsi\s*:\s*(.+)/i);
+    if (provMatch) headerInfo.provinsi = provMatch[1].trim();
+
+    // Sumber Dana
+    if (line.includes('Sumber Dana')) {
+      const sdMatch = line.match(/Sumber Dana\s*:?\s*(.+)/i);
+      if (sdMatch) {
+        const val = sdMatch[1].trim();
+        if (val && val !== ':' && !val.includes('No.') && !val.includes('Kode')) {
+          headerInfo.sumberDana = val;
+        }
+      }
+    }
+
+    // Kepala Sekolah / Bendahara
+    if (line.includes('Kepala Sekolah')) headerInfo.kepalaSekolah = 'Kepala Sekolah';
+    if (line.includes('Bendahara') && headerInfo.kepalaSekolah) headerInfo.bendahara = 'Bendahara';
+
+    // Try to get actual names
+    const nameMatch = line.match(/^[A-Z][a-z]+.*(?:S\.Pd|S\.Kom|M\.M|M\.Si|S\.E|S\.S)/);
+    if (nameMatch) {
+      if (!headerInfo.kepalaSekolahName) {
+        headerInfo.kepalaSekolahName = line.trim();
+      } else if (!headerInfo.bendaharaName) {
+        headerInfo.bendaharaName = line.trim();
+      }
+    }
+  }
+
+  // If tahun not found, try generic
+  if (!headerInfo.tahun) {
+    const tahunM = text.match(/:\s*(\d{4})/);
+    if (tahunM) headerInfo.tahun = tahunM[1];
+  }
+
+  // Tanggal tutup
+  const tanggalMatch = text.match(/(\d{1,2}\s+\w+\s+\d{4})/);
+  if (tanggalMatch) headerInfo.tanggalTutup = tanggalMatch[1];
+
+  // --- Extract transaction rows ---
+  // BKU Pajak rows: TANGGAL  NO_KODE  URAIAN  PPN  PPh21  PPh23  PPh4  SSPD  PENGELUARAN  SALDO
+  const transactions: BKUPajakTransaction[] = [];
+  let totalPPN = 0, totalPPh21 = 0, totalPPh23 = 0, totalPPh4 = 0, totalSSPD = 0;
+  let totalPenerimaan = 0, totalPengeluaran = 0, saldoAkhir = 0;
+
+  const jenisPajakMap = new Map<string, { nama: string; totalPenerimaan: number; totalPengeluaran: number; jumlahTransaksi: number }>();
+
+  for (const line of lines) {
+    const upperLine = line.toUpperCase();
+    // Skip header rows
+    if (upperLine.startsWith('TANGGAL') || upperLine.includes('KODE') && upperLine.includes('URAIAN')) continue;
+    if (upperLine.includes('PPN') && upperLine.includes('PPH') && !line.match(/^\d/)) continue;
+    if (upperLine.startsWith('HALAMAN')) continue;
+
+    // Try to match data rows starting with a date or number
+    const parts = line.split(/\s{2,}|\t/).filter(Boolean);
+    if (parts.length < 5) continue;
+
+    // Check for Jumlah/total row
+    if (parts[0].trim().toUpperCase() === 'JUMLAH') {
+      totalPPN = parseAmount(parts[3]);
+      totalPPh21 = parseAmount(parts[4]);
+      totalPPh23 = parseAmount(parts[5]);
+      totalPPh4 = parseAmount(parts[6]);
+      totalSSPD = parseAmount(parts[7]);
+      totalPengeluaran = parseAmount(parts[parts.length - 2]);
+      saldoAkhir = parseAmount(parts[parts.length - 1]);
+      totalPenerimaan = totalPPN + totalPPh21 + totalPPh23 + totalPPh4 + totalSSPD;
+      continue;
+    }
+
+    // Skip rows that don't look like data (no date-like first field)
+    const firstPart = parts[0].trim();
+    if (!firstPart || !firstPart.match(/^\d/)) continue;
+
+    const tanggal = firstPart;
+    const noKode = parts[1]?.trim() || '';
+    const uraian = parts[2]?.trim() || '';
+
+    const ppn = parseAmount(parts[3]);
+    const pph21 = parseAmount(parts[4]);
+    const pph23 = parseAmount(parts[5]);
+    const pph4 = parseAmount(parts[6]);
+    const sspd = parseAmount(parts[7]);
+    const pengeluaran = parseAmount(parts[parts.length - 2]);
+    const saldo = parseAmount(parts[parts.length - 1]);
+
+    let jenisTransaksi: 'Terima' | 'Setor' | 'Lainnya' = 'Lainnya';
+    if (uraian.toLowerCase().startsWith('terima')) jenisTransaksi = 'Terima';
+    else if (uraian.toLowerCase().startsWith('setor')) jenisTransaksi = 'Setor';
+
+    transactions.push({
+      tanggal,
+      noKode,
+      uraian,
+      ppn,
+      pph21,
+      pph23,
+      pph4,
+      sspd,
+      pengeluaran,
+      saldo,
+      jenisTransaksi,
+    });
+
+    // Aggregate by noKode
+    if (noKode) {
+      const existing = jenisPajakMap.get(noKode);
+      if (existing) {
+        existing.totalPenerimaan += ppn + pph21 + pph23 + pph4 + sspd;
+        existing.totalPengeluaran += pengeluaran;
+        existing.jumlahTransaksi += 1;
+      } else {
+        let cleanNama = uraian
+          .replace(/^Terima\s+(PPN\s+|PPh\s+)?/i, '')
+          .replace(/^Setor\s+(PPN\s+|PPh\s+)?/i, '')
+          .replace(/\s*\(.*?\)\s*/g, '')
+          .trim();
+        if (!cleanNama) cleanNama = uraian.trim();
+        jenisPajakMap.set(noKode, {
+          nama: cleanNama,
+          totalPenerimaan: ppn + pph21 + pph23 + pph4 + sspd,
+          totalPengeluaran: pengeluaran,
+          jumlahTransaksi: 1,
+        });
+      }
+    }
+  }
+
+  // If no total row found, compute from transactions
+  if (totalPenerimaan === 0 && totalPengeluaran === 0) {
+    totalPPN = transactions.reduce((s, t) => s + t.ppn, 0);
+    totalPPh21 = transactions.reduce((s, t) => s + t.pph21, 0);
+    totalPPh23 = transactions.reduce((s, t) => s + t.pph23, 0);
+    totalPPh4 = transactions.reduce((s, t) => s + t.pph4, 0);
+    totalSSPD = transactions.reduce((s, t) => s + t.sspd, 0);
+    totalPenerimaan = totalPPN + totalPPh21 + totalPPh23 + totalPPh4 + totalSSPD;
+    totalPengeluaran = transactions.reduce((s, t) => s + t.pengeluaran, 0);
+    saldoAkhir = transactions.length > 0 ? transactions[transactions.length - 1].saldo : 0;
+  }
+
+  // Build jenisPajak list
+  const namaMap = new Map<string, BKUPajakJenisPajak>();
+  for (const [kode, info] of jenisPajakMap) {
+    const key = info.nama;
+    const existing = namaMap.get(key);
+    if (existing) {
+      existing.totalPenerimaan += info.totalPenerimaan;
+      existing.totalPengeluaran += info.totalPengeluaran;
+      existing.jumlahTransaksi += info.jumlahTransaksi;
+    } else {
+      namaMap.set(key, {
+        kode,
+        nama: info.nama,
+        totalPenerimaan: info.totalPenerimaan,
+        totalPengeluaran: info.totalPengeluaran,
+        jumlahTransaksi: info.jumlahTransaksi,
+      });
+    }
+  }
+  const jenisPajak = Array.from(namaMap.values()).sort((a, b) => b.totalPenerimaan - a.totalPenerimaan);
+
+  const bkuPajakMonth: BKUPajakMonth = {
+    fileName,
+    bulan: (headerInfo.bulan || '').toUpperCase(),
+    tahun: headerInfo.tahun || '',
+    sumberDana: headerInfo.sumberDana || '',
+    namaSekolah: headerInfo.namaSekolah || '',
+    npsn: headerInfo.npsn || '',
+    alamat: headerInfo.alamat || '',
+    kabupaten: headerInfo.kabupaten || '',
+    provinsi: headerInfo.provinsi || '',
+    transactions,
+    totalPPN,
+    totalPPh21,
+    totalPPh23,
+    totalPPh4,
+    totalSSPD,
+    totalPenerimaan,
+    totalPengeluaran,
+    saldoAkhir,
+    jenisPajak,
+    tanggalTutup: headerInfo.tanggalTutup || '',
+    kepalaSekolah: headerInfo.kepalaSekolahName || headerInfo.kepalaSekolah || '',
+    bendahara: headerInfo.bendaharaName || headerInfo.bendahara || '',
+  };
+
+  return bkuPajakMonth;
+}
+
+// --- Python PDF Parser (Local mode) ---
 const PYTHON_SCRIPT = `
 import pdfplumber
 import json
@@ -162,7 +396,6 @@ for i, page in enumerate(pdf.pages):
             name_match = re.match(r'^[A-Z][a-z]+.*(?:S\\.Pd|S\\.Kom|M\\.M|M\\.Si|S\\.E|S\\.S)', line.strip())
             if name_match:
                 if 'kepalaSekolah' not in header_info or header_info.get('kepalaSekolah') == 'Kepala Sekolah':
-                    # Check which column based on position in page
                     if li > 0 and 'Kepala Sekolah' not in lines[li-1] and 'Bendahara' not in lines[li-1]:
                         if 'kepalaSekolahName' not in header_info:
                             header_info['kepalaSekolahName'] = line.strip()
@@ -230,8 +463,24 @@ result = {'header': header_info, 'rows': all_rows}
 print(json.dumps(result, ensure_ascii=False))
 `;
 
-// --- Parse single BKU Pajak file ---
-function parseBKUPajakFile(fileName: string): BKUPajakMonth | null {
+// --- Parse single BKU Pajak file (dual-mode) ---
+async function parseBKUPajakFile(fileName: string): Promise<BKUPajakMonth | null> {
+  if (isServerless()) {
+    // Serverless: download from blob + parse with pdf-parse + regex
+    const blobInfo = await getBlobInfo(fileName);
+    if (!blobInfo) return null;
+
+    try {
+      const info = await processPDF(fileName);
+      const fullText = info.extractedText.map(p => p.text).join('\n');
+      return parseBKUPajakFromText(fullText, fileName);
+    } catch (err) {
+      console.error(`Failed to parse BKU Pajak ${fileName} (serverless):`, err);
+      return null;
+    }
+  }
+
+  // Local: existing Python approach
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) return null;
 
@@ -410,10 +659,46 @@ function parseBKUPajakFile(fileName: string): BKUPajakMonth | null {
 
 // GET: List all BKU Pajak files and their parsed data
 export async function GET() {
-  if (isServerless()) {
-    return serverlessErrorResponse('BKU Pajak');
-  }
   try {
+    if (isServerless()) {
+      // Serverless: list from blob, process each with pdf-parse
+      const allFiles = await getPDFFiles();
+      const files = allFiles.filter(f => isBKUPajakFile(f)).sort();
+
+      const months: BKUPajakMonth[] = [];
+      for (const file of files) {
+        try {
+          const data = await parseBKUPajakFile(file);
+          if (data) months.push(data);
+        } catch (err) {
+          console.error(`Error parsing BKU Pajak file ${file}:`, err);
+        }
+      }
+
+      // Sort by month order
+      months.sort((a, b) => {
+        if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
+        const ma = MONTH_ORDER.indexOf(a.bulan);
+        const mb = MONTH_ORDER.indexOf(b.bulan);
+        const ia = ma === -1 ? 99 : ma;
+        const ib = mb === -1 ? 99 : mb;
+        return ia - ib;
+      });
+
+      // Deduplicate in memory
+      const seen = new Map<string, BKUPajakMonth>();
+      for (const m of months) {
+        const key = `${m.bulan}_${m.tahun}`;
+        if (!seen.has(key)) {
+          seen.set(key, m);
+        }
+      }
+      const dedupedMonths = Array.from(seen.values());
+
+      return NextResponse.json({ months: dedupedMonths, files });
+    }
+
+    // Local: read from upload dir
     if (!fs.existsSync(UPLOAD_DIR)) {
       return NextResponse.json({ months: [], files: [] });
     }
@@ -425,7 +710,7 @@ export async function GET() {
     const months: BKUPajakMonth[] = [];
     for (const file of files) {
       try {
-        const data = parseBKUPajakFile(file);
+        const data = await parseBKUPajakFile(file);
         if (data) months.push(data);
       } catch (err) {
         console.error(`Error parsing BKU Pajak file ${file}:`, err);
@@ -471,21 +756,44 @@ export async function GET() {
 
 // POST: Import a new BKU Pajak file
 export async function POST(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('BKU Pajak');
-  }
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     if (!file) return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     if (!file.name.endsWith('.pdf')) return NextResponse.json({ error: 'Only PDF files allowed' }, { status: 400 });
 
-    const filePath = path.join(UPLOAD_DIR, file.name);
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    await writeFile(filePath, buffer);
 
-    const data = parseBKUPajakFile(file.name);
+    if (isServerless()) {
+      // Serverless: upload to blob + parse
+      await uploadToBlob(file.name, buffer);
+      const data = await parseBKUPajakFile(file.name);
+      if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
+
+      // Deduplicate: delete other blob BKU Pajak files with the same bulan+tahun
+      let replacedFile: string | null = null;
+      if (data.bulan && data.tahun) {
+        const existingFiles = (await getPDFFiles()).filter(f => isBKUPajakFile(f) && f !== file.name);
+        for (const existing of existingFiles) {
+          try {
+            const existingData = await parseBKUPajakFile(existing);
+            if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+              replacedFile = existing;
+              await deleteFromBlob(existing);
+            }
+          } catch {}
+        }
+      }
+
+      return NextResponse.json({ success: true, data, replaced: replacedFile });
+    }
+
+    // Local: save to upload dir + process with Python
+    const filePath = path.join(UPLOAD_DIR, file.name);
+    await writeFileLocal(filePath, buffer);
+
+    const data = await parseBKUPajakFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
     // Deduplicate: remove other BKU Pajak files with the same bulan+tahun
@@ -495,7 +803,7 @@ export async function POST(request: Request) {
         .filter(f => isBKUPajakFile(f) && f !== file.name);
       for (const existing of existingFiles) {
         try {
-          const existingData = parseBKUPajakFile(existing);
+          const existingData = await parseBKUPajakFile(existing);
           if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
             replacedFile = existing;
             const oldPath = path.join(UPLOAD_DIR, existing);
@@ -519,14 +827,18 @@ export async function POST(request: Request) {
 
 // DELETE: Remove a BKU Pajak file and its cache
 export async function DELETE(request: Request) {
-  if (isServerless()) {
-    return serverlessErrorResponse('BKU Pajak');
-  }
   try {
     const body = await request.json();
     const { fileName } = body;
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
 
+    if (isServerless()) {
+      // Serverless: delete from blob
+      await deleteFromBlob(fileName);
+      return NextResponse.json({ success: true });
+    }
+
+    // Local: delete from upload dir + cache
     const filePath = path.join(UPLOAD_DIR, fileName);
     const cachePath = getCacheKey(fileName);
 
@@ -540,7 +852,7 @@ export async function DELETE(request: Request) {
   }
 }
 
-function writeFile(filePath: string, buffer: Buffer): Promise<void> {
+function writeFileLocal(filePath: string, buffer: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
     fs.writeFile(filePath, buffer, (err) => err ? reject(err) : resolve());
   });

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { isServerless, serverlessErrorResponse } from '@/lib/serverless';
+import { isServerless } from '@/lib/serverless';
+import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { parseBKUFromText } from '@/lib/pdf-text-parser';
 import fs from 'fs';
 import path from 'path';
 
@@ -48,6 +50,71 @@ function generateNomorSurat(noPesanan: string, tglPesan: string) {
     nomorSuratBAST: `421.3/${paddedNo}-BAST/SMANSA-TD/${romanMonth}/${yearStr}`,
     nomorSuratSHP: `421.3/${paddedNo}-PB/SMANSA-TD/${romanMonth}/${yearStr}`,
   };
+}
+
+// ─── BKU Cache Types ────────────────────────────────────────────────────────
+
+interface BKUTransaction {
+  tanggal: string;
+  kodeKegiatan: string;
+  kodeRekening: string;
+  noBukti: string;
+  uraian: string;
+  penerimaan: number;
+  pengeluaran: number;
+  saldo: number;
+}
+
+interface BKUCacheData {
+  data: {
+    fileName: string;
+    bulan: string;
+    tahun: string;
+    transactions: BKUTransaction[];
+  };
+}
+
+// ─── Load BKU data from local cache or from blob ────────────────────────────
+
+function loadBKUCacheLocal(): BKUCacheData[] {
+  const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+  if (!fs.existsSync(CACHE_DIR)) return [];
+  const cacheFiles = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.bku.json'));
+  const results: BKUCacheData[] = [];
+  for (const cf of cacheFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, cf), 'utf-8'));
+      if (data?.data) results.push(data);
+    } catch {}
+  }
+  return results;
+}
+
+async function loadBKUCacheServerless(): Promise<BKUCacheData[]> {
+  try {
+    const allFiles = await getPDFFiles();
+    const bkuFiles = allFiles.filter(f =>
+      f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.toLowerCase().endsWith('.pdf')
+    );
+
+    const results: BKUCacheData[] = [];
+    for (const file of bkuFiles) {
+      try {
+        const info = await processPDF(file);
+        const fullText = info.extractedText.map(p => p.text).join('\n');
+        const data = parseBKUFromText(fullText, file);
+        if (data && data.transactions.length > 0) {
+          results.push({ data });
+        }
+      } catch (err) {
+        console.error(`Failed to load BKU cache for ${file} (serverless):`, err);
+      }
+    }
+    return results;
+  } catch (err) {
+    console.error('Failed to load BKU cache (serverless):', err);
+    return [];
+  }
 }
 
 // ─── GET: List all BNUs ────────────────────────────────────────────────────
@@ -226,37 +293,14 @@ export async function DELETE(request: Request) {
 // ─── Sync: Sync BNU data from BKU cache files ──────────────────────────────
 
 async function handleSync() {
-  if (isServerless()) {
-    return serverlessErrorResponse('Sync BNU');
-  }
   try {
-    const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+    // Load BKU data (dual-mode)
+    const cacheDataList = isServerless()
+      ? await loadBKUCacheServerless()
+      : loadBKUCacheLocal();
 
-    if (!fs.existsSync(CACHE_DIR)) {
+    if (cacheDataList.length === 0) {
       return NextResponse.json({ data: [], message: 'No BKU cache found' });
-    }
-
-    // Read all .bku.json cache files
-    const cacheFiles = fs.readdirSync(CACHE_DIR).filter((f) => f.endsWith('.bku.json'));
-
-    interface BKUTransaction {
-      tanggal: string;
-      kodeKegiatan: string;
-      kodeRekening: string;
-      noBukti: string;
-      uraian: string;
-      penerimaan: number;
-      pengeluaran: number;
-      saldo: number;
-    }
-
-    interface BKUCache {
-      data: {
-        fileName: string;
-        bulan: string;
-        tahun: string;
-        transactions: BKUTransaction[];
-      };
     }
 
     // Collect all BNU transactions (pengeluaran > 0, noBukti starts with "BNU")
@@ -268,12 +312,9 @@ async function handleSync() {
       }
     >();
 
-    for (const cacheFile of cacheFiles) {
+    for (const cacheData of cacheDataList) {
       try {
-        const cachePath = path.join(CACHE_DIR, cacheFile);
-        const raw = fs.readFileSync(cachePath, 'utf-8');
-        const cache: BKUCache = JSON.parse(raw);
-        const bkuData = cache.data;
+        const bkuData = cacheData.data;
         if (!bkuData || !bkuData.transactions) continue;
 
         for (const tx of bkuData.transactions) {
@@ -288,7 +329,7 @@ async function handleSync() {
           }
         }
       } catch (err) {
-        console.error(`Failed to read cache file ${cacheFile}:`, err);
+        console.error(`Failed to read BKU cache data:`, err);
       }
     }
 
