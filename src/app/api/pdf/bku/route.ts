@@ -5,11 +5,12 @@ import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
+import { db } from '@/lib/db';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
 if (!isServerless()) {
-  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (err) { console.error('Failed to create cache directory:', err); }
 }
 
 interface BKUTransaction {
@@ -39,13 +40,64 @@ interface BKUMonth {
   tanggalTutup: string;
 }
 
+// --- DB helper functions ---
+function dbRecordToBKUMonth(record: {
+  fileName: string;
+  bulan: string;
+  tahun: string;
+  sumberDana: string;
+  namaSekolah: string;
+  npsn: string;
+  transactions: unknown;
+  totalPenerimaan: number;
+  totalPengeluaran: number;
+  saldoAkhir: number;
+  saldoAkhirBank: number;
+  saldoAkhirTunai: number;
+  tanggalTutup: string;
+}): BKUMonth {
+  return {
+    fileName: record.fileName,
+    bulan: record.bulan,
+    tahun: record.tahun,
+    sumberDana: record.sumberDana,
+    namaSekolah: record.namaSekolah,
+    npsn: record.npsn,
+    transactions: record.transactions as BKUTransaction[],
+    totalPenerimaan: record.totalPenerimaan,
+    totalPengeluaran: record.totalPengeluaran,
+    saldoAkhir: record.saldoAkhir,
+    saldoAkhirBank: record.saldoAkhirBank,
+    saldoAkhirTunai: record.saldoAkhirTunai,
+    tanggalTutup: record.tanggalTutup,
+  };
+}
+
+function dbCreateFromBKUMonth(data: BKUMonth) {
+  return {
+    fileName: data.fileName,
+    bulan: data.bulan,
+    tahun: data.tahun,
+    sumberDana: data.sumberDana,
+    namaSekolah: data.namaSekolah,
+    npsn: data.npsn,
+    totalPenerimaan: data.totalPenerimaan,
+    totalPengeluaran: data.totalPengeluaran,
+    saldoAkhir: data.saldoAkhir,
+    saldoAkhirBank: data.saldoAkhirBank,
+    saldoAkhirTunai: data.saldoAkhirTunai,
+    tanggalTutup: data.tanggalTutup,
+    transactions: data.transactions as unknown[],
+  };
+}
+
 function getCacheKey(fileName: string): string {
   return path.join(CACHE_DIR, `${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}.bku.json`);
 }
 
 function getFileModTime(fileName: string): number {
   if (isServerless()) return 0;
-  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch { return 0; }
+  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch (err) { console.error('Failed to get file mod time:', err); return 0; }
 }
 
 function parseAmount(s: string | null | undefined): number {
@@ -110,16 +162,30 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
   // Detect format: pdf2json produces tab-separated columns with date at start
+  // Also detect if text has significant tab separation (column detection mode)
   const isPdf2Json = lines.some(l => {
-    const tabs = l.split('\t');
-    return tabs.length >= 5 && /^\d{2}-\d{2}-\d{4}/.test(tabs[0]?.trim());
+    const tabs = l.split('\t').filter(Boolean);
+    if (tabs.length < 3) return false;
+    const first = tabs[0]?.trim();
+    // Match date patterns: dd-mm-yyyy, dd/mm/yyyy, or d-mm-yyyy
+    return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(first);
+  }) || lines.some(l => {
+    // Fallback: check for tab-separated lines with BKU-specific patterns
+    const tabs = l.split('\t').filter(Boolean);
+    return tabs.length >= 5 && tabs.some(t => /^(BPU|BNU|BBU)\d+$/i.test(t.trim()));
   });
 
-  if (isPdf2Json) {
+  // Also treat as pdf2json if text has tabs but no clear pdfplumber format
+  const hasTabs = text.includes('\t');
+  const useTabParsing = isPdf2Json || (hasTabs && !lines.some(l => /^\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\s+/.test(l) && !l.includes('\t')));
+
+  console.log(`[BKU Parser] isPdf2Json=${isPdf2Json}, hasTabs=${hasTabs}, useTabParsing=${useTabParsing}, lines=${lines.length}`);
+
+  if (isPdf2Json || useTabParsing) {
     // pdf2json format: tab-separated columns
     // Pattern 1 (with kode kegiatan): tanggal \t kodeKegiatan \t kodeRekening \t [splitPart] \t noBukti \t uraian \t penerimaan \t pengeluaran \t saldo
     // Pattern 2 (without kode kegiatan): tanggal \t uraian \t penerimaan \t pengeluaran \t saldo
-    const dateRe = /^\d{2}-\d{2}-\d{4}$/;
+    const dateRe = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
     const kodeKegiatanRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;
     const kodeRekeningRe = /^5\.\d+\.[\d.]+$/;
     const noBuktiRe = /^(BPU|BNU|BBU)\d+$/i;
@@ -255,6 +321,8 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
     tanggalTutup: headerInfo.tanggalTutup || '',
   };
 
+  console.log(`[BKU Parser] Parsed ${fileName}: ${transactions.length} transactions, bulan=${headerInfo.bulan}, tahun=${headerInfo.tahun}, namaSekolah=${headerInfo.namaSekolah}`);
+
   return bkuMonth;
 }
 
@@ -294,7 +362,9 @@ async function parseBKUFile(fileName: string, buffer?: Buffer): Promise<BKUMonth
         return cached.data;
       }
     }
-  } catch {}
+  } catch (err) {
+    console.error(`Failed to read cache for ${fileName}:`, err);
+  }
 
   // Use Python to extract tables from BKU PDF
   const pythonScript = `
@@ -429,7 +499,9 @@ print(json.dumps(result, ensure_ascii=False))
   // Save to cache
   try {
     fs.writeFileSync(cachePath, JSON.stringify({ data: bkuMonth, fileModifiedAt: fileModTime, cachedAt: Date.now() }));
-  } catch {}
+  } catch (err) {
+    console.error(`Failed to write cache for ${fileName}:`, err);
+  }
 
   return bkuMonth;
 }
@@ -446,15 +518,34 @@ export async function GET() {
     const monthOrder = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
 
     if (isServerless()) {
-      // Serverless: list from blob, process each with pdf-parse
+      // Serverless: list from blob, check DB first, only re-parse if no DB record
       const allFiles = await getPDFFiles();
       const files = allFiles.filter(f => isBKUFile(f)).sort();
 
       const months: BKUMonth[] = [];
       for (const file of files) {
         try {
+          // Try DB first
+          const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
+          if (dbRecord) {
+            months.push(dbRecordToBKUMonth(dbRecord));
+            continue;
+          }
+          // No DB record - parse from blob
           const data = await parseBKUFile(file);
-          if (data) months.push(data);
+          if (data) {
+            months.push(data);
+            // Save to DB for future requests
+            try {
+              await db.bKUMonthDB.upsert({
+                where: { fileName: file },
+                create: dbCreateFromBKUMonth(data),
+                update: dbCreateFromBKUMonth(data),
+              });
+            } catch (dbErr) {
+              console.error(`Failed to cache BKU ${file} to database:`, dbErr);
+            }
+          }
         } catch (err) {
           console.error(`Error parsing BKU file ${file}:`, err);
         }
@@ -490,8 +581,31 @@ export async function GET() {
 
     const months: BKUMonth[] = [];
     for (const file of files) {
+      // Try DB first
+      try {
+        const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
+        if (dbRecord) {
+          months.push(dbRecordToBKUMonth(dbRecord));
+          continue;
+        }
+      } catch (dbErr) {
+        console.error(`Failed to read BKU ${file} from database:`, dbErr);
+      }
+      // No DB record - parse from file
       const data = await parseBKUFile(file);
-      if (data) months.push(data);
+      if (data) {
+        months.push(data);
+        // Save to DB for future requests
+        try {
+          await db.bKUMonthDB.upsert({
+            where: { fileName: file },
+            create: dbCreateFromBKUMonth(data),
+            update: dbCreateFromBKUMonth(data),
+          });
+        } catch (dbErr) {
+          console.error(`Failed to cache BKU ${file} to database:`, dbErr);
+        }
+      }
     }
 
     // Sort by month order
@@ -512,12 +626,13 @@ export async function GET() {
         seen.set(key, m);
       }
     }
-    // Clean up duplicate files from disk
+    // Clean up duplicate files from disk + DB
     for (const fn of toDelete) {
       const oldPath = path.join(UPLOAD_DIR, fn);
       const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch {}
-      try { fs.unlinkSync(oldCache); } catch {}
+      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
+      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${fn}:`, err); }
+      try { await db.bKUMonthDB.delete({ where: { fileName: fn } }); } catch (dbErr) { console.error(`Failed to delete BKU ${fn} from database:`, dbErr); }
     }
     const dedupedMonths = Array.from(seen.values());
 
@@ -546,18 +661,47 @@ export async function POST(request: Request) {
       const data = await parseBKUFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
+      // Save to database
+      try {
+        await db.bKUMonthDB.upsert({
+          where: { fileName: file.name },
+          create: dbCreateFromBKUMonth(data),
+          update: dbCreateFromBKUMonth(data),
+        });
+      } catch (dbErr) {
+        console.error('Failed to save BKU to database:', dbErr);
+      }
+
       // Deduplicate: delete other blob BKU files with the same bulan+tahun
       let replacedFile: string | null = null;
       if (data.bulan && data.tahun) {
         const existingFiles = (await getPDFFiles()).filter(f => isBKUFile(f) && f !== file.name);
         for (const existing of existingFiles) {
           try {
-            const existingData = await parseBKUFile(existing);
-            if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+            // Try DB first to check month/year
+            const existingDbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: existing } });
+            let matches = false;
+            if (existingDbRecord) {
+              matches = existingDbRecord.bulan === data.bulan && existingDbRecord.tahun === data.tahun;
+            } else {
+              const existingData = await parseBKUFile(existing);
+              if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+                matches = true;
+              }
+            }
+            if (matches) {
               replacedFile = existing;
               await deleteFromBlob(existing);
+              // Delete DB record for replaced file
+              try {
+                await db.bKUMonthDB.delete({ where: { fileName: existing } });
+              } catch (dbErr) {
+                console.error(`Failed to delete replaced BKU ${existing} from database:`, dbErr);
+              }
             }
-          } catch {}
+          } catch (err) {
+            console.error(`Error checking existing BKU file ${existing}:`, err);
+          }
         }
       }
 
@@ -571,25 +715,53 @@ export async function POST(request: Request) {
     const data = await parseBKUFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
+    // Save to database
+    try {
+      await db.bKUMonthDB.upsert({
+        where: { fileName: file.name },
+        create: dbCreateFromBKUMonth(data),
+        update: dbCreateFromBKUMonth(data),
+      });
+    } catch (dbErr) {
+      console.error('Failed to save BKU to database:', dbErr);
+    }
+
     // Deduplicate: remove other BKU files with the same bulan+tahun
     let replacedFile: string | null = null;
     if (data.bulan && data.tahun) {
       const existingFiles = fs.readdirSync(UPLOAD_DIR)
         .filter(f => isBKUFile(f) && f !== file.name);
       for (const existing of existingFiles) {
-        const existingData = await parseBKUFile(existing);
-        if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+        // Try DB first to check month/year
+        let matches = false;
+        try {
+          const existingDbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: existing } });
+          if (existingDbRecord) {
+            matches = existingDbRecord.bulan === data.bulan && existingDbRecord.tahun === data.tahun;
+          }
+        } catch (dbErr) {
+          console.error(`Failed to check DB for existing BKU ${existing}:`, dbErr);
+        }
+        if (!matches) {
+          const existingData = await parseBKUFile(existing);
+          if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
+            matches = true;
+          }
+        }
+        if (matches) {
           replacedFile = existing;
           // Delete the old file and its cache
           const oldPath = path.join(UPLOAD_DIR, existing);
           const oldCache = getCacheKey(existing);
-          try { fs.unlinkSync(oldPath); } catch {}
-          try { fs.unlinkSync(oldCache); } catch {}
+          try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
+          try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${existing}:`, err); }
+          // Delete DB record for replaced file
+          try { await db.bKUMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete replaced BKU ${existing} from database:`, dbErr); }
         }
       }
       // Invalidate cache for new file since we need fresh parse
       const newCache = getCacheKey(file.name);
-      try { fs.unlinkSync(newCache); } catch {}
+      try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to delete cache for ${file.name}:`, err); }
     }
 
     return NextResponse.json({ success: true, data, replaced: replacedFile });
@@ -610,6 +782,12 @@ export async function DELETE(request: Request) {
     if (isServerless()) {
       // Serverless: delete from blob
       await deleteFromBlob(fileName);
+      // Delete from database
+      try {
+        await db.bKUMonthDB.delete({ where: { fileName } });
+      } catch (dbErr) {
+        console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
+      }
       return NextResponse.json({ success: true });
     }
 
@@ -619,6 +797,13 @@ export async function DELETE(request: Request) {
 
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
+
+    // Delete from database
+    try {
+      await db.bKUMonthDB.delete({ where: { fileName } });
+    } catch (dbErr) {
+      console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

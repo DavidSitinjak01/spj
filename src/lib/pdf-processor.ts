@@ -310,18 +310,19 @@ async function extractTextWithPdf2Json(buffer: Buffer): Promise<{
 
 /**
  * Process a single page from pdf2json's output into tab-separated text.
- * Groups text items by Y position (same line), then sorts by X position
- * and inserts tabs when there's a significant horizontal gap.
  *
- * Key insight: pdf2json's `w` (width) values are inflated (representing cell
- * width, not text width), causing gap-based tab insertion to produce negative
- * gaps. The fix is to use x-position gap only (ignoring the `w` value) with
- * strict Y grouping.
+ * Strategy:
+ * 1. Group text items by Y position into visual lines
+ * 2. Detect column positions by analyzing x-position clusters across all lines
+ * 3. Insert tabs between items that belong to different detected columns
+ *
+ * This approach is more robust than simple gap thresholds because it
+ * automatically adapts to the PDF's actual column layout.
  */
 function extractPageTextFromPdf2Json(page: any): string {
   if (!page?.Texts || !Array.isArray(page.Texts)) return '';
 
-  const items: { str: string; x: number; y: number }[] = [];
+  const items: { str: string; x: number; y: number; w: number }[] = [];
 
   for (const text of page.Texts) {
     if (!text.R || !Array.isArray(text.R)) continue;
@@ -340,18 +341,20 @@ function extractPageTextFromPdf2Json(page: any): string {
         str: combinedStr,
         x: text.x || 0,
         y: text.y || 0,
+        w: text.w || 0,
       });
     }
   }
 
   if (items.length === 0) return '';
 
-  // Strict Y grouping - pdf2json Y coordinates are in small units
-  // Using 0.5 tolerance prevents merging adjacent table rows
-  const LINE_TOLERANCE = 0.5;
+  // --- Step 1: Group items by Y position into visual lines ---
+  // Use adaptive tolerance: sort by Y first, then group items that are close
+  const sortedByY = [...items].sort((a, b) => a.y - b.y);
+  const LINE_TOLERANCE = 0.8; // Slightly more tolerant to handle subscripts/superscripts
   const lines: { y: number; items: typeof items }[] = [];
 
-  for (const item of items) {
+  for (const item of sortedByY) {
     let foundLine = false;
     for (const line of lines) {
       if (Math.abs(line.y - item.y) <= LINE_TOLERANCE) {
@@ -367,30 +370,100 @@ function extractPageTextFromPdf2Json(page: any): string {
 
   lines.sort((a, b) => a.y - b.y);
 
-  // Use x-position gap only (ignore pdf2json's 'w' value which is inflated)
-  // When gap between consecutive items' x positions > threshold, insert tab
-  const MIN_X_GAP_FOR_TAB = 1.0;
+  // --- Step 2: Detect column positions ---
+  // Collect all x-positions where items start, then cluster them.
+  // Items that start at similar x-positions across lines likely belong to the same column.
+  const allXPositions: number[] = [];
+  for (const line of lines) {
+    for (const item of line.items) {
+      allXPositions.push(item.x);
+    }
+  }
+
+  // Sort and cluster x-positions: group positions that are within COLUMN_TOLERANCE of each other
+  const COLUMN_TOLERANCE = 2.0; // Items within 2 units of x are in the same column
+  const sortedX = [...allXPositions].sort((a, b) => a - b);
+  const columnCenters: number[] = [];
+
+  for (const x of sortedX) {
+    let foundColumn = false;
+    for (let i = 0; i < columnCenters.length; i++) {
+      if (Math.abs(columnCenters[i] - x) <= COLUMN_TOLERANCE) {
+        // Update running average
+        columnCenters[i] = (columnCenters[i] + x) / 2;
+        foundColumn = true;
+        break;
+      }
+    }
+    if (!foundColumn) {
+      columnCenters.push(x);
+    }
+  }
+
+  columnCenters.sort((a, b) => a - b);
+
+  // Merge columns that are too close together (within 3 units)
+  const mergedColumns: number[] = [];
+  for (const col of columnCenters) {
+    if (mergedColumns.length === 0 || col - mergedColumns[mergedColumns.length - 1] > 3.0) {
+      mergedColumns.push(col);
+    } else {
+      // Too close - merge by averaging
+      mergedColumns[mergedColumns.length - 1] = (mergedColumns[mergedColumns.length - 1] + col) / 2;
+    }
+  }
+
+  // --- Step 3: Build lines with tab-separated columns ---
+  const MIN_X_GAP_FOR_TAB = 1.5; // Minimum gap between text end and next text start to insert tab
   const pageLines: string[] = [];
 
   for (const line of lines) {
     line.items.sort((a, b) => a.x - b.x);
 
-    let lineText = '';
-    let lastX = -Infinity;
-
+    // Assign each item to a column index
+    const itemColumns: { item: typeof items[0]; colIdx: number }[] = [];
     for (const item of line.items) {
-      const xGap = item.x - lastX;
-      if (lastX > -Infinity && xGap > MIN_X_GAP_FOR_TAB) {
-        lineText += '\t';
-      } else if (lastX > -Infinity && xGap > 0) {
-        lineText += ' ';
+      // Find nearest column
+      let nearestCol = 0;
+      let minDist = Infinity;
+      for (let ci = 0; ci < mergedColumns.length; ci++) {
+        const dist = Math.abs(mergedColumns[ci] - item.x);
+        if (dist < minDist) {
+          minDist = dist;
+          nearestCol = ci;
+        }
       }
-      // If xGap <= 0, items overlap - just concatenate (no separator)
+      itemColumns.push({ item, colIdx: nearestCol });
+    }
+
+    // Build line text with tabs between different columns
+    let lineText = '';
+    let lastColIdx = -1;
+
+    for (const { item, colIdx } of itemColumns) {
+      if (lastColIdx >= 0) {
+        if (colIdx > lastColIdx) {
+          // Different column - insert tab(s)
+          // If there are skipped columns, insert extra tabs
+          const tabCount = colIdx - lastColIdx;
+          lineText += '\t'.repeat(tabCount);
+        } else if (colIdx === lastColIdx) {
+          // Same column - just add a space between items
+          lineText += ' ';
+        }
+        // If colIdx < lastColIdx, items overlap - just concatenate
+      }
       lineText += item.str;
-      lastX = item.x;
+      lastColIdx = colIdx;
     }
 
     pageLines.push(lineText);
+  }
+
+  // Log extraction summary for debugging
+  console.log(`[pdf2json] Page extracted: ${lines.length} lines, ${mergedColumns.length} detected columns, ${items.length} text items`);
+  if (mergedColumns.length > 0 && mergedColumns.length <= 20) {
+    console.log(`[pdf2json] Column positions: ${mergedColumns.map(c => c.toFixed(1)).join(', ')}`);
   }
 
   return pageLines.join('\n');

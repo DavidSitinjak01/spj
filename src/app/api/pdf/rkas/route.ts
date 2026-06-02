@@ -5,11 +5,12 @@ import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
+import { db } from '@/lib/db';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
 if (!isServerless()) {
-  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (err) { console.error('Failed to create cache dir:', err); }
 }
 
 // --- Interfaces ---
@@ -75,7 +76,7 @@ function getCacheKey(fileName: string): string {
 
 function getFileModTime(fileName: string): number {
   if (isServerless()) return 0;
-  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch { return 0; }
+  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch (err) { console.error('Failed to stat file', fileName, ':', err); return 0; }
 }
 
 function parseAmount(s: string | null | undefined): number {
@@ -84,7 +85,8 @@ function parseAmount(s: string | null | undefined): number {
 }
 
 function isRKASFile(fileName: string): boolean {
-  return fileName.toLowerCase().endsWith('.pdf') && !fileName.toLowerCase().includes('bku');
+  const lower = fileName.toLowerCase();
+  return lower.endsWith('.pdf') && !lower.includes('bku') && !lower.includes('pajak');
 }
 
 // Extract the top-level standar code from kodeProgram
@@ -93,6 +95,49 @@ function extractStandarCode(kodeProgram: string): string {
   const cleaned = kodeProgram.replace(/\s/g, '');
   const match = cleaned.match(/^(\d{2})\./);
   return match ? match[1] : '';
+}
+
+// --- DB Conversion Helpers ---
+function rkasMonthToDB(data: RKASMonth) {
+  return {
+    fileName: data.fileName,
+    judul: data.judul,
+    bulan: data.bulan,
+    tahun: data.tahun,
+    tipe: data.tipe,
+    sumberDana: data.sumberDana,
+    namaSekolah: data.namaSekolah,
+    npsn: data.npsn,
+    alamat: data.alamat,
+    kabupaten: data.kabupaten,
+    provinsi: data.provinsi,
+    totalPenerimaan: data.totalPenerimaan,
+    totalBelanja: data.totalBelanja,
+    penerimaan: data.penerimaan as any,
+    standarList: data.standarList as any,
+    allItems: data.allItems as any,
+  };
+}
+
+function dbToRKASMonth(record: any): RKASMonth {
+  return {
+    fileName: record.fileName,
+    judul: record.judul,
+    bulan: record.bulan,
+    tahun: record.tahun,
+    tipe: record.tipe as 'bulanan' | 'tahunan',
+    sumberDana: record.sumberDana,
+    namaSekolah: record.namaSekolah,
+    npsn: record.npsn,
+    alamat: record.alamat,
+    kabupaten: record.kabupaten,
+    provinsi: record.provinsi,
+    totalPenerimaan: record.totalPenerimaan,
+    totalBelanja: record.totalBelanja,
+    penerimaan: record.penerimaan as RKASPenerimaanItem[],
+    standarList: record.standarList as RKASStandar[],
+    allItems: record.allItems as RKASItem[],
+  };
 }
 
 // --- Serverless: Parse RKAS from extracted text using regex ---
@@ -791,7 +836,7 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
 
   const judul = headerInfo.judul || (tipe === 'bulanan' ? 'Rincian Kertas Kerja Perbulan' : 'Kertas Kerja RKAS');
 
-  return {
+  const result = {
     fileName,
     judul,
     bulan: bulanValue,
@@ -809,6 +854,10 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     standarList,
     allItems,
   };
+
+  console.log(`[RKAS Parser] Parsed ${fileName}: ${allItems.length} items, tipe=${tipe}, bulan=${bulanValue}, tahun=${headerInfo.tahun}, penerimaan=${penerimaan.length}, standarList=${standarList.length}`);
+
+  return result;
 }
 
 // --- Regex helpers ---
@@ -1132,7 +1181,7 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
         return cached.data;
       }
     }
-  } catch {}
+  } catch (err) { console.error('Failed to read cache for', fileName, ':', err); }
 
   // Use Python to extract tables from RKAS PDF
   let result;
@@ -1275,7 +1324,7 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
   // Save to cache
   try {
     fs.writeFileSync(cachePath, JSON.stringify({ data: rkasMonth, fileModifiedAt: fileModTime, cachedAt: Date.now() }));
-  } catch {}
+  } catch (err) { console.error('Failed to write cache for', fileName, ':', err); }
 
   return rkasMonth;
 }
@@ -1290,8 +1339,27 @@ export async function GET() {
     const months: RKASMonth[] = [];
     for (const file of files) {
       try {
+        // Check DB first to avoid re-parsing
+        const dbRecord = await db.rKASMonthDB.findUnique({ where: { fileName: file } });
+        if (dbRecord) {
+          months.push(dbToRKASMonth(dbRecord));
+          continue;
+        }
+        // No DB record - parse from PDF
         const data = await parseRKASFile(file);
-        if (data) months.push(data);
+        if (data) {
+          months.push(data);
+          // Save to DB for future requests
+          try {
+            await db.rKASMonthDB.upsert({
+              where: { fileName: file },
+              update: rkasMonthToDB(data),
+              create: rkasMonthToDB(data),
+            });
+          } catch (dbErr) {
+            console.error(`Failed to save RKAS ${file} to DB:`, dbErr);
+          }
+        }
       } catch (err) {
         console.error(`Error parsing RKAS file ${file}:`, err);
       }
@@ -1334,12 +1402,13 @@ export async function GET() {
         seen.set(key, m);
       }
     }
-    // Clean up duplicate files from disk
+    // Clean up duplicate files from disk and DB
     for (const fn of toDelete) {
       const oldPath = path.join(UPLOAD_DIR, fn);
       const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch {}
-      try { fs.unlinkSync(oldCache); } catch {}
+      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
+      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${fn}:`, err); }
+      try { await db.rKASMonthDB.delete({ where: { fileName: fn } }); } catch (err) { console.error(`Failed to delete DB record for ${fn}:`, err); }
     }
     const dedupedMonths = Array.from(seen.values());
 
@@ -1386,7 +1455,7 @@ export async function POST(request: Request) {
         // Try once more without throwDetails to see if it returns data anyway
         try {
           data = await parseRKASFile(file.name, buffer);
-        } catch {}
+        } catch (err2) { console.error('RKAS second parse attempt failed:', err2); }
       }
 
       if (!data) return NextResponse.json({
@@ -1398,12 +1467,30 @@ export async function POST(request: Request) {
         hint: 'PDF text extraction may have failed. The diagnostic info above shows which step failed.',
       }, { status: 500 });
 
+      // Save parsed data to DB
+      try {
+        await db.rKASMonthDB.upsert({
+          where: { fileName: data.fileName },
+          update: rkasMonthToDB(data),
+          create: rkasMonthToDB(data),
+        });
+      } catch (dbErr) {
+        console.error('Failed to save RKAS to DB:', dbErr);
+      }
+
       // Deduplicate: delete other blob files with same key
       let replacedFile: string | null = null;
       const existingFiles = (await getPDFFiles()).filter(f => isRKASFile(f) && f !== file.name);
       for (const existing of existingFiles) {
         try {
-          const existingData = await parseRKASFile(existing);
+          // Check DB first, then parse if needed
+          let existingData: RKASMonth | null = null;
+          const dbRecord = await db.rKASMonthDB.findUnique({ where: { fileName: existing } });
+          if (dbRecord) {
+            existingData = dbToRKASMonth(dbRecord);
+          } else {
+            existingData = await parseRKASFile(existing);
+          }
           if (!existingData) continue;
           const isDuplicate = data.tipe === 'tahunan'
             ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
@@ -1411,8 +1498,10 @@ export async function POST(request: Request) {
           if (isDuplicate) {
             replacedFile = existing;
             await deleteFromBlob(existing);
+            // Also delete DB record for the replaced file
+            try { await db.rKASMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete DB record for ${existing}:`, dbErr); }
           }
-        } catch {}
+        } catch (err) { console.error(`Error deduplicating RKAS file ${existing}:`, err); }
       }
 
       return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
@@ -1424,6 +1513,17 @@ export async function POST(request: Request) {
 
     const data = await parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
+
+    // Save parsed data to DB
+    try {
+      await db.rKASMonthDB.upsert({
+        where: { fileName: data.fileName },
+        update: rkasMonthToDB(data),
+        create: rkasMonthToDB(data),
+      });
+    } catch (dbErr) {
+      console.error('Failed to save RKAS to DB:', dbErr);
+    }
 
     // Deduplicate: remove other RKAS files with the same key
     let replacedFile: string | null = null;
@@ -1440,14 +1540,16 @@ export async function POST(request: Request) {
           replacedFile = existing;
           const oldPath = path.join(UPLOAD_DIR, existing);
           const oldCache = getCacheKey(existing);
-          try { fs.unlinkSync(oldPath); } catch {}
-          try { fs.unlinkSync(oldCache); } catch {}
+          try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
+          try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${existing}:`, err); }
+          // Also delete DB record for the replaced file
+          try { await db.rKASMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete DB record for ${existing}:`, dbErr); }
         }
-      } catch {}
+      } catch (err) { console.error(`Error deduplicating RKAS file ${existing}:`, err); }
     }
     // Invalidate cache for new file so next GET parses fresh
     const newCache = getCacheKey(file.name);
-    try { fs.unlinkSync(newCache); } catch {}
+    try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to invalidate cache for ${file.name}:`, err); }
 
     return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
   } catch (error: any) {
@@ -1462,6 +1564,13 @@ export async function DELETE(request: Request) {
     const body = await request.json();
     const { fileName } = body;
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
+
+    // Delete DB record
+    try {
+      await db.rKASMonthDB.delete({ where: { fileName } });
+    } catch (dbErr) {
+      console.error(`Failed to delete RKAS DB record for ${fileName}:`, dbErr);
+    }
 
     if (isServerless()) {
       await deleteFromBlob(fileName);

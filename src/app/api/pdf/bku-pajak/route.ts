@@ -5,11 +5,12 @@ import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
+import { db } from '@/lib/db';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
 if (!isServerless()) {
-  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (err) { console.error('Failed to create cache directory:', err); }
 }
 
 // --- Interfaces ---
@@ -61,6 +62,93 @@ interface BKUPajakMonth {
 }
 
 const MONTH_ORDER = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
+
+// --- DB Helpers ---
+function bkuPajakMonthToDB(data: BKUPajakMonth) {
+  return {
+    fileName: data.fileName,
+    bulan: data.bulan,
+    tahun: data.tahun,
+    sumberDana: data.sumberDana,
+    namaSekolah: data.namaSekolah,
+    npsn: data.npsn,
+    alamat: data.alamat,
+    kabupaten: data.kabupaten,
+    provinsi: data.provinsi,
+    totalPPN: data.totalPPN,
+    totalPPh21: data.totalPPh21,
+    totalPPh23: data.totalPPh23,
+    totalPPh4: data.totalPPh4,
+    totalSSPD: data.totalSSPD,
+    totalPenerimaan: data.totalPenerimaan,
+    totalPengeluaran: data.totalPengeluaran,
+    saldoAkhir: data.saldoAkhir,
+    transactions: data.transactions as any,
+    jenisPajak: data.jenisPajak as any,
+    tanggalTutup: data.tanggalTutup,
+    kepalaSekolah: data.kepalaSekolah,
+    bendahara: data.bendahara,
+  };
+}
+
+function bkuPajakDBToMonth(record: any): BKUPajakMonth {
+  return {
+    fileName: record.fileName,
+    bulan: record.bulan,
+    tahun: record.tahun,
+    sumberDana: record.sumberDana,
+    namaSekolah: record.namaSekolah,
+    npsn: record.npsn,
+    alamat: record.alamat,
+    kabupaten: record.kabupaten,
+    provinsi: record.provinsi,
+    transactions: record.transactions as BKUPajakTransaction[],
+    totalPPN: record.totalPPN,
+    totalPPh21: record.totalPPh21,
+    totalPPh23: record.totalPPh23,
+    totalPPh4: record.totalPPh4,
+    totalSSPD: record.totalSSPD,
+    totalPenerimaan: record.totalPenerimaan,
+    totalPengeluaran: record.totalPengeluaran,
+    saldoAkhir: record.saldoAkhir,
+    jenisPajak: record.jenisPajak as BKUPajakJenisPajak[],
+    tanggalTutup: record.tanggalTutup,
+    kepalaSekolah: record.kepalaSekolah,
+    bendahara: record.bendahara,
+  };
+}
+
+async function saveBKUPajakToDB(data: BKUPajakMonth): Promise<void> {
+  try {
+    const dbData = bkuPajakMonthToDB(data);
+    await db.bKUPajakMonthDB.upsert({
+      where: { fileName: data.fileName },
+      update: dbData,
+      create: dbData,
+    });
+  } catch (err) {
+    console.error(`Failed to save BKU Pajak data to DB for ${data.fileName}:`, err);
+  }
+}
+
+async function deleteBKUPajakFromDB(fileName: string): Promise<void> {
+  try {
+    await db.bKUPajakMonthDB.deleteMany({ where: { fileName } });
+  } catch (err) {
+    console.error(`Failed to delete BKU Pajak DB record for ${fileName}:`, err);
+  }
+}
+
+async function getBKUPajakFromDB(fileName: string): Promise<BKUPajakMonth | null> {
+  try {
+    const record = await db.bKUPajakMonthDB.findUnique({ where: { fileName } });
+    if (record) return bkuPajakDBToMonth(record);
+    return null;
+  } catch (err) {
+    console.error(`Failed to read BKU Pajak DB record for ${fileName}:`, err);
+    return null;
+  }
+}
 
 // --- Helpers ---
 function getCacheKey(fileName: string): string {
@@ -146,14 +234,21 @@ function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | 
 
   // Detect format: pdf2json produces tab-separated columns with date at start
   const isPdf2Json = lines.some(l => {
-    const tabs = l.split('\t');
-    return tabs.length >= 5 && /^\d{2}-\d{2}-\d{4}/.test(tabs[0]?.trim());
+    const tabs = l.split('\t').filter(Boolean);
+    if (tabs.length < 3) return false;
+    const first = tabs[0]?.trim();
+    return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(first);
   });
 
-  if (isPdf2Json) {
+  const hasTabs = text.includes('\t');
+  const useTabParsing = isPdf2Json || (hasTabs && !lines.some(l => /^\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\s+/.test(l) && !l.includes('\t')));
+
+  console.log(`[BKU Pajak Parser] isPdf2Json=${isPdf2Json}, hasTabs=${hasTabs}, useTabParsing=${useTabParsing}, lines=${lines.length}`);
+
+  if (isPdf2Json || useTabParsing) {
     // pdf2json format: tanggal \t noKode \t uraian \t ppn \t pph21 \t [extra] \t pph23 \t pph4 \t sspd \t pengeluaran \t saldo
     // There might be an extra column between pph21 and pph23 from the header layout
-    const dateRe = /^\d{2}-\d{2}-\d{4}$/;
+    const dateRe = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
     const noKodeRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;
 
     for (const line of lines) {
@@ -390,6 +485,8 @@ function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | 
     bendahara: headerInfo.bendaharaName || headerInfo.bendahara || '',
   };
 
+  console.log(`[BKU Pajak Parser] Parsed ${fileName}: ${transactions.length} transactions, bulan=${headerInfo.bulan}, tahun=${headerInfo.tahun}`);
+
   return bkuPajakMonth;
 }
 
@@ -579,7 +676,7 @@ async function parseBKUPajakFile(fileName: string, buffer?: Buffer): Promise<BKU
         return cached.data;
       }
     }
-  } catch {}
+  } catch (err) { console.error(`Failed to read cache for ${fileName}:`, err); }
 
   // Use Python to extract tables
   let result;
@@ -735,7 +832,7 @@ async function parseBKUPajakFile(fileName: string, buffer?: Buffer): Promise<BKU
   // Save to cache
   try {
     fs.writeFileSync(cachePath, JSON.stringify({ data: bkuPajakMonth, fileModifiedAt: fileModTime, cachedAt: Date.now() }));
-  } catch {}
+  } catch (err) { console.error(`Failed to write cache for ${fileName}:`, err); }
 
   return bkuPajakMonth;
 }
@@ -747,15 +844,26 @@ export async function GET() {
   applyDOMPolyfills();
   try {
     if (isServerless()) {
-      // Serverless: list from blob, process each with pdf-parse
+      // Serverless: list from blob, check DB first, only re-parse if no DB record
       const allFiles = await getPDFFiles();
       const files = allFiles.filter(f => isBKUPajakFile(f)).sort();
 
       const months: BKUPajakMonth[] = [];
       for (const file of files) {
         try {
+          // Check DB first
+          const dbRecord = await getBKUPajakFromDB(file);
+          if (dbRecord) {
+            months.push(dbRecord);
+            continue;
+          }
+          // No DB record - parse from blob
           const data = await parseBKUPajakFile(file);
-          if (data) months.push(data);
+          if (data) {
+            months.push(data);
+            // Save to DB for future requests
+            await saveBKUPajakToDB(data);
+          }
         } catch (err) {
           console.error(`Error parsing BKU Pajak file ${file}:`, err);
         }
@@ -796,8 +904,19 @@ export async function GET() {
     const months: BKUPajakMonth[] = [];
     for (const file of files) {
       try {
+        // Check DB first
+        const dbRecord = await getBKUPajakFromDB(file);
+        if (dbRecord) {
+          months.push(dbRecord);
+          continue;
+        }
+        // No DB record - parse from file
         const data = await parseBKUPajakFile(file);
-        if (data) months.push(data);
+        if (data) {
+          months.push(data);
+          // Save to DB for future requests
+          await saveBKUPajakToDB(data);
+        }
       } catch (err) {
         console.error(`Error parsing BKU Pajak file ${file}:`, err);
       }
@@ -824,12 +943,13 @@ export async function GET() {
         seen.set(key, m);
       }
     }
-    // Clean up duplicate files from disk
+    // Clean up duplicate files from disk and DB
     for (const fn of toDelete) {
       const oldPath = path.join(UPLOAD_DIR, fn);
       const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch {}
-      try { fs.unlinkSync(oldCache); } catch {}
+      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
+      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache for ${fn}:`, err); }
+      await deleteBKUPajakFromDB(fn);
     }
     const dedupedMonths = Array.from(seen.values());
 
@@ -858,18 +978,27 @@ export async function POST(request: Request) {
       const data = await parseBKUPajakFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
+      // Save to DB
+      await saveBKUPajakToDB(data);
+
       // Deduplicate: delete other blob BKU Pajak files with the same bulan+tahun
       let replacedFile: string | null = null;
       if (data.bulan && data.tahun) {
         const existingFiles = (await getPDFFiles()).filter(f => isBKUPajakFile(f) && f !== file.name);
         for (const existing of existingFiles) {
           try {
-            const existingData = await parseBKUPajakFile(existing);
+            // Check DB for existing file data first
+            let existingData = await getBKUPajakFromDB(existing);
+            if (!existingData) {
+              existingData = await parseBKUPajakFile(existing);
+              if (existingData) await saveBKUPajakToDB(existingData);
+            }
             if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
               replacedFile = existing;
               await deleteFromBlob(existing);
+              await deleteBKUPajakFromDB(existing);
             }
-          } catch {}
+          } catch (err) { console.error(`Failed to deduplicate ${existing}:`, err); }
         }
       }
 
@@ -883,6 +1012,9 @@ export async function POST(request: Request) {
     const data = await parseBKUPajakFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
+    // Save to DB
+    await saveBKUPajakToDB(data);
+
     // Deduplicate: remove other BKU Pajak files with the same bulan+tahun
     let replacedFile: string | null = null;
     if (data.bulan && data.tahun) {
@@ -890,19 +1022,25 @@ export async function POST(request: Request) {
         .filter(f => isBKUPajakFile(f) && f !== file.name);
       for (const existing of existingFiles) {
         try {
-          const existingData = await parseBKUPajakFile(existing);
+          // Check DB for existing file data first
+          let existingData = await getBKUPajakFromDB(existing);
+          if (!existingData) {
+            existingData = await parseBKUPajakFile(existing);
+            if (existingData) await saveBKUPajakToDB(existingData);
+          }
           if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
             replacedFile = existing;
             const oldPath = path.join(UPLOAD_DIR, existing);
             const oldCache = getCacheKey(existing);
-            try { fs.unlinkSync(oldPath); } catch {}
-            try { fs.unlinkSync(oldCache); } catch {}
+            try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
+            try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache for ${existing}:`, err); }
+            await deleteBKUPajakFromDB(existing);
           }
-        } catch {}
+        } catch (err) { console.error(`Failed to deduplicate ${existing}:`, err); }
       }
       // Invalidate cache for new file
       const newCache = getCacheKey(file.name);
-      try { fs.unlinkSync(newCache); } catch {}
+      try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to invalidate cache for ${file.name}:`, err); }
     }
 
     return NextResponse.json({ success: true, data, replaced: replacedFile });
@@ -919,6 +1057,9 @@ export async function DELETE(request: Request) {
     const body = await request.json();
     const { fileName } = body;
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
+
+    // Always delete DB record
+    await deleteBKUPajakFromDB(fileName);
 
     if (isServerless()) {
       // Serverless: delete from blob

@@ -135,3 +135,78 @@ model BNUItem {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
+
+// ============================================================================
+// PDF Import Persistence Models
+// Stores parsed PDF data in the database so it survives Vercel serverless
+// cold starts and doesn't require re-parsing on every GET request.
+// ============================================================================
+
+model BKUMonthDB {
+  id               String   @id @default(cuid())
+  fileName         String   @unique
+  bulan            String   @default("")
+  tahun            String   @default("")
+  sumberDana       String   @default("")
+  namaSekolah      String   @default("")
+  npsn             String   @default("")
+  totalPenerimaan  Int      @default(0)
+  totalPengeluaran Int      @default(0)
+  saldoAkhir       Int      @default(0)
+  saldoAkhirBank   Int      @default(0)
+  saldoAkhirTunai  Int      @default(0)
+  tanggalTutup     String   @default("")
+  transactions     Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model BKUPajakMonthDB {
+  id               String   @id @default(cuid())
+  fileName         String   @unique
+  bulan            String   @default("")
+  tahun            String   @default("")
+  sumberDana       String   @default("")
+  namaSekolah      String   @default("")
+  npsn             String   @default("")
+  alamat           String   @default("")
+  kabupaten        String   @default("")
+  provinsi         String   @default("")
+  totalPPN         Int      @default(0)
+  totalPPh21       Int      @default(0)
+  totalPPh23       Int      @default(0)
+  totalPPh4        Int      @default(0)
+  totalSSPD        Int      @default(0)
+  totalPenerimaan  Int      @default(0)
+  totalPengeluaran Int      @default(0)
+  saldoAkhir       Int      @default(0)
+  transactions     Json     @default("[]")
+  jenisPajak       Json     @default("[]")
+  tanggalTutup     String   @default("")
+  kepalaSekolah    String   @default("")
+  bendahara        String   @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model RKASMonthDB {
+  id               String   @id @default(cuid())
+  fileName         String   @unique
+  judul            String   @default("")
+  bulan            String   @default("")
+  tahun            String   @default("")
+  tipe             String   @default("bulanan")
+  sumberDana       String   @default("")
+  namaSekolah      String   @default("")
+  npsn             String   @default("")
+  alamat           String   @default("")
+  kabupaten        String   @default("")
+  provinsi         String   @default("")
+  totalPenerimaan  Int      @default(0)
+  totalBelanja     Int      @default(0)
+  penerimaan       Json     @default("[]")
+  standarList      Json     @default("[]")
+  allItems         Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
