@@ -58,3 +58,27 @@ Stage Summary:
 - Parser handles both pdf-parse and pdfjs-dist output formats
 - Code pushed to GitHub, user should test at https://spj-five.vercel.app/
 - User can debug extraction issues via the /api diagnostic endpoint
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix "Failed to parse RKAS" 500 error on Vercel - pdfjs-dist worker path resolution
+
+Work Log:
+- Discovered the root cause via debug endpoint: pdfjs-dist v6 fails with "Cannot find module pdf.worker.mjs" error
+- The error occurs because Next.js/Turbopack bundles the module differently, and the worker file is not at the expected path
+- First attempted fix: set GlobalWorkerOptions.workerSrc = '' → Failed with "No GlobalWorkerOptions.workerSrc specified"
+- Correct fix: Use require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs') via createRequire(import.meta.url) to find the actual worker file path at runtime
+- Added fallback path construction using process.cwd() + node_modules for environments where require.resolve fails
+- Applied the worker fix to all 3 extraction methods: extractTextWithPdfjsDist, extractTextWithPdfParse, extractTextWithPdfjsSimple
+- Added debug endpoint at /api/pdf/debug for step-by-step diagnosis of upload+parsing
+- Made RKAS API return detailed error info (step, error message, diagnostic data) instead of generic "Failed to parse RKAS"
+- Improved frontend error display to show diagnostic details
+- Added pdfjs-dist simple extraction as fallback #3 (non-position-aware, just joins text items)
+- Tested locally: RKAS upload works successfully, returns full parsed data with 40+ items
+
+Stage Summary:
+- Root cause: pdfjs-dist v6 requires GlobalWorkerOptions.workerSrc to be set to a valid file path, but Next.js bundling breaks the path resolution
+- Fix: Use require.resolve() to dynamically find the worker file at runtime
+- Debug endpoint at /api/pdf/debug for future diagnosis
+- Pushed to GitHub commit 69470ce, deploying to Vercel at https://spj-five.vercel.app/
