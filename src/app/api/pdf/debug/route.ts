@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { isServerless } from '@/lib/serverless';
-import { processPDFBuffer, uploadToBlob, getBlobInfo, getPDFFiles, downloadFromBlobByPathname } from '@/lib/pdf-processor';
+import { processPDFBuffer, uploadToBlob, getBlobInfo, getPDFFiles, downloadFromBlobByPathname, ensureDOMPolyfills } from '@/lib/pdf-processor';
 
 /**
  * Debug endpoint for testing PDF upload and text extraction step by step.
@@ -8,6 +8,9 @@ import { processPDFBuffer, uploadToBlob, getBlobInfo, getPDFFiles, downloadFromB
  * Returns detailed diagnostic information about each step.
  */
 export async function POST(request: Request) {
+  // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
+  ensureDOMPolyfills();
+
   const diagnostics: Record<string, any> = {
     timestamp: new Date().toISOString(),
     isServerless: isServerless(),
@@ -219,6 +222,9 @@ export async function POST(request: Request) {
  * GET: Quick diagnostic of the environment and blob storage.
  */
 export async function GET() {
+  // Apply DOM polyfills before any pdfjs-dist imports
+  ensureDOMPolyfills();
+
   const diagnostics: Record<string, any> = {
     timestamp: new Date().toISOString(),
     isServerless: isServerless(),

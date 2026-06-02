@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
+import { ensureDOMPolyfills } from "@/lib/pdf-processor";
 
 export async function GET() {
+  // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
+  ensureDOMPolyfills();
+
   const diagnostics: Record<string, any> = {
     status: "ok",
     timestamp: new Date().toISOString(),

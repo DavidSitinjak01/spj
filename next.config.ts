@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   },
   reactStrictMode: false,
   turbopack: {},
+  // Enable instrumentation hook for DOMMatrix polyfill on Vercel serverless
+  experimental: {
+    instrumentationHook: true,
+  },
 };
 
 export default nextConfig;
