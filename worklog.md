@@ -1,127 +1,23 @@
 ---
 Task ID: 1
-Agent: Main Agent
-Task: Fix "Failed to parse RKAS" error on Vercel serverless
+Agent: main
+Task: Fix "Cannot find module pdf.worker.mjs" error on Vercel serverless
 
 Work Log:
-- Investigated root cause: pdf-parse v2.4.5 extracts text in a completely different format from pdfplumber
-- pdf-parse produces tab-separated columns in visual order (left-to-right), not logical table order
-- Header fields (Nama Sekolah, Alamat, etc.) are split across multiple lines in pdf-parse output
-- Belanja rows have tabs separating columns but in different order than pdfplumber
-- "Total Penerimaan" appears AFTER "B. BELANJA" in pdf-parse output
-- Penerimaan kode regex didn't match deep nesting like "4.3.1.01."
-
-Fixes applied:
-1. Rewrote parseRKASFromText in both route.ts and pdf-text-parser.ts to handle pdf-parse format
-2. Added tab-aware parsing with hasTabs detection
-3. Added multi-line header extraction with field-order mapping (handles both bulanan and tahunan formats)
-4. Added "B. BELANJA" detection for belanja section start
-5. Added isTahunanTable detection from subsequent header lines (BOSP REGULER, SILPA, etc.)
-6. Fixed penerimaan regex: changed (?:\.\d+)? to (?:\.\d+)* to match "4.3.1.01"
-7. Added "Total Penerimaan" search after "B. BELANJA" (pdf-parse order issue)
-8. Added bulanan tab-separated format parsing with kode prog suffix/prefix handling
-9. Added tahunan tab-separated format parsing with budget number extraction
-10. Added better error logging in parseRKASFile
-
-Test results (local with pdf-parse):
-- Bulanan RKAS: 74 items parsed, all headers correct, total belanja = 185,010,000
-- Tahunan RKAS: 219 items parsed, all headers correct, total belanja = 1,345,510,009
+- Analyzed the error: pdfjs-dist's "fake worker" tries to dynamically import pdf.worker.mjs using a path computed from import.meta.url, but on Vercel's bundled serverless environment, the chunk doesn't exist at that path
+- Previous DOMMatrix polyfill fix was working (error changed from "DOMMatrix is not defined" to "Cannot find module pdf.worker.mjs")
+- Installed pdf2json (^4.0.3) as a worker-free, pure JavaScript PDF parser
+- Rewrote pdf-processor.ts extraction logic:
+  - Method 1: pdf2json (PRIMARY — worker-free, no DOMMatrix needed, pure JS)
+  - Method 2: pdfjs-dist with position-aware extraction (fallback)
+  - Method 3: pdfjs-dist simple extraction (last resort)
+- Added serverExternalPackages: ['pdfjs-dist', 'pdf2json', 'canvas'] to next.config.ts
+- Removed experimental.instrumentationHook (no longer needed in Next.js 16)
+- Updated diagnostic and debug routes to test pdf2json and use centralized extraction
+- Committed and pushed to GitHub (commit d1a29a9)
 
 Stage Summary:
-- Root cause: pdf-parse text format is completely different from pdfplumber (tab-separated, different column order, multi-line headers)
-- Fixed by making parseRKASFromText format-aware (pdf-parse vs pdfplumber detection via tab presence)
-- Both Bulanan and Tahunan RKAS formats now parse correctly with pdf-parse extracted text
-- Lint passes, dev server running correctly
-
----
-Task ID: 1
-Agent: Main Agent
-Task: Fix "Failed to parse RKAS" error on Vercel deployment
-
-Work Log:
-- Investigated the root cause: pdf-parse v2.4.5 uses pdfjs-dist internally but fails on Vercel serverless
-- Rewrote PDF text extraction in pdf-processor.ts to use pdfjs-dist directly (primary) with pdf-parse as fallback
-- Added position-aware text extraction that groups text items by Y position and inserts tabs for significant X gaps
-- Updated parseRKASFromText in both pdf-text-parser.ts and rkas/route.ts to handle pdfjs-dist output format
-- Fixed tahunan parser: added pdfjsMatch regex to detect "noUrut kodeRekening kodeProgram" format
-- Fixed bulanan parser: added isPdfjsDistFormat detection and new parsing branch
-- Fixed firstPartExtra regex bug that incorrectly matched when pdfjsMatch already captured kodeRekening
-- Fixed simpleUJ/uraianJumlahMatch priority - now tries simpleUJ first to extract correct jumlah
-- Updated diagnostic /api endpoint to test both pdfjs-dist and pdf-parse extraction
-- Improved error messages in RKAS POST route
-- Fixed lint errors (require imports → dynamic imports)
-- Tested locally: Tahunan extracts 220 items with correct jumlah, Bulanan extracts 86 items
-- Pushed to GitHub for Vercel deployment
-
-Stage Summary:
-- PDF text extraction now uses pdfjs-dist directly, which is more reliable on Vercel serverless
-- Parser handles both pdf-parse and pdfjs-dist output formats
-- Code pushed to GitHub, user should test at https://spj-five.vercel.app/
-- User can debug extraction issues via the /api diagnostic endpoint
-
----
-Task ID: 2
-Agent: Main Agent
-Task: Fix "Failed to parse RKAS" 500 error on Vercel - pdfjs-dist worker path resolution
-
-Work Log:
-- Discovered the root cause via debug endpoint: pdfjs-dist v6 fails with "Cannot find module pdf.worker.mjs" error
-- The error occurs because Next.js/Turbopack bundles the module differently, and the worker file is not at the expected path
-- First attempted fix: set GlobalWorkerOptions.workerSrc = '' → Failed with "No GlobalWorkerOptions.workerSrc specified"
-- Correct fix: Use require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs') via createRequire(import.meta.url) to find the actual worker file path at runtime
-- Added fallback path construction using process.cwd() + node_modules for environments where require.resolve fails
-- Applied the worker fix to all 3 extraction methods: extractTextWithPdfjsDist, extractTextWithPdfParse, extractTextWithPdfjsSimple
-- Added debug endpoint at /api/pdf/debug for step-by-step diagnosis of upload+parsing
-- Made RKAS API return detailed error info (step, error message, diagnostic data) instead of generic "Failed to parse RKAS"
-- Improved frontend error display to show diagnostic details
-- Added pdfjs-dist simple extraction as fallback #3 (non-position-aware, just joins text items)
-- Tested locally: RKAS upload works successfully, returns full parsed data with 40+ items
-
-Stage Summary:
-- Root cause: pdfjs-dist v6 requires GlobalWorkerOptions.workerSrc to be set to a valid file path, but Next.js bundling breaks the path resolution
-- Fix: Use require.resolve() to dynamically find the worker file at runtime
-- Debug endpoint at /api/pdf/debug for future diagnosis
-- Pushed to GitHub commit 69470ce, deploying to Vercel at https://spj-five.vercel.app/
----
-Task ID: 1
-Agent: Main Agent
-Task: Fix "DOMMatrix is not defined" error causing "Failed to parse RKAS" / 500 on Vercel serverless
-
-Work Log:
-- Read current code files: pdf-processor.ts, pdf-text-parser.ts, RKAS route, debug route, diagnostic route
-- Identified root cause: pdfjs-dist requires DOMMatrix (a browser API) that doesn't exist in Node.js serverless on Vercel
-- All three extraction methods failed because they all ultimately depend on pdfjs-dist which needs DOMMatrix
-- Installed 'dommatrix' npm package as a proper DOMMatrix polyfill
-- Added ensureDOMPolyfills() function to pdf-processor.ts that polyfills DOMMatrix, DOMPoint, and DOMRect on globalThis
-- Applied polyfills at module load time AND inside each extraction function as safety net
-- Created instrumentation.ts to apply polyfills at server startup (before any route code runs)
-- Enabled instrumentationHook in next.config.ts
-- Added polyfill calls to debug and diagnostic route files
-- Committed and pushed to GitHub for Vercel deployment
-
-Stage Summary:
-- Root cause: DOMMatrix is a browser API not available in Node.js serverless (Vercel)
-- Fix: Polyfill DOMMatrix, DOMPoint, DOMRect on globalThis before pdfjs-dist is imported
-- Multiple safety layers: instrumentation.ts (server startup), module-level (pdf-processor.ts), function-level (each extraction function)
-- Deployed as commit b7d57d7 to https://github.com/DavidSitinjak01/spj.git
-
----
-Task ID: 2
-Agent: Main Agent
-Task: Fix DOMMatrix polyfill - replace broken dommatrix package with working stub
-
-Work Log:
-- Discovered that the 'dommatrix' npm package does NOT export a DOMMatrix class (only utility functions)
-- Removed the broken 'dommatrix' package
-- Created dedicated src/lib/dom-polyfill.ts with minimal but working stub polyfills for DOMMatrix, DOMPoint, DOMRect
-- Tested locally: polyfill stub works - PDF text extraction succeeds with it
-- Added polyfill import to ALL 13 API route files (19 handler functions) that use pdfjs-dist
-- Simplified instrumentation.ts to just import the polyfill module
-- Polyfill applied at 3 layers: instrumentation.ts (server startup), module import (pdf-processor.ts), function call (each handler)
-- Committed as 36ece5d and pushed to GitHub
-
-Stage Summary:
-- Root cause: 'dommatrix' package was broken (no DOMMatrix class exported)
-- Fix: Self-contained stub polyfill that was tested and proven to work for text extraction
-- Coverage: All API routes now have polyfill applied
-- Vercel deployment should now work
+- pdf2json is now the primary PDF extraction method — completely worker-free
+- serverExternalPackages prevents Next.js from bundling pdfjs-dist, which should fix the fake worker issue on Vercel production builds
+- Both pdf2json and pdfjs-dist load successfully in local testing
+- Vercel auto-deploy triggered from the GitHub push
