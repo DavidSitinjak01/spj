@@ -21,3 +21,22 @@ Stage Summary:
 - serverExternalPackages prevents Next.js from bundling pdfjs-dist, which should fix the fake worker issue on Vercel production builds
 - Both pdf2json and pdfjs-dist load successfully in local testing
 - Vercel auto-deploy triggered from the GitHub push
+
+---
+Task ID: 2
+Agent: main
+Task: Fix BKU and BKU Pajak import - no data parsed after upload
+
+Work Log:
+- Analyzed pdf2json output format: all text on 1-2 very long lines with many tab-separated values
+- Old parsers split by \n then by tabs, but pdf2json puts everything on 1 line → no rows detected
+- Rewrote parseBKUFromText to detect pdf2json format (>20 tabs per line) and scan flat token array
+- BKU Tunai: detects kodeKegiatan(5.x.x.x.x)+date or standalone date as row boundaries
+- BKU Pajak: detects date+noKode as row start, scans for 7 consecutive amount tokens
+- Kept pdfplumber format parsing as fallback for local mode
+- Local testing confirmed: 205 BKU Tunai rows and 14 BKU Pajak rows correctly detected
+- Pushed to GitHub (commit ac0fbee)
+
+Stage Summary:
+- Both BKU and BKU Pajak parsers now handle pdf2json format correctly
+- Vercel auto-deploy triggered
