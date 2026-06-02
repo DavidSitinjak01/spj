@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 import { isServerless } from '@/lib/serverless';
-import { processPDFBuffer, uploadToBlob, getPDFFiles } from '@/lib/pdf-processor';
+import { processPDFBuffer, processPDF, uploadToBlob, getPDFFiles } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 
 /**
  * Debug endpoint for testing PDF upload and text extraction step by step.
  * POST /api/pdf/debug with FormData containing a 'file' field.
  * Returns detailed diagnostic information about each step.
+ * 
+ * GET /api/pdf/debug?fileName=xxx.pdf - Extract text from a blob file
+ * GET /api/pdf/debug - Quick environment check
  */
 export async function POST(request: Request) {
-  // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
   applyDOMPolyfills();
 
   const diagnostics: Record<string, any> = {
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    // Step 2: Test pdf2json import (primary — worker-free)
+    // Step 2: Test pdf2json import
     diagnostics.steps.pdf2jsonImport = { status: 'pending' };
     try {
       const pdf2json = await import('pdf2json');
@@ -56,24 +58,7 @@ export async function POST(request: Request) {
       };
     }
 
-    // Step 3: Test pdfjs-dist import (secondary)
-    diagnostics.steps.pdfjsImport = { status: 'pending' };
-    try {
-      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-      diagnostics.steps.pdfjsImport = {
-        status: 'ok',
-        hasGetDocument: typeof pdfjs.getDocument === 'function',
-        version: pdfjs.version || 'unknown',
-      };
-    } catch (err: any) {
-      diagnostics.steps.pdfjsImport = {
-        status: 'failed',
-        error: err?.message || String(err),
-      };
-    }
-
-    // Step 4: Test processPDFBuffer (the function used by RKAS route)
-    // This tries pdf2json → pdfjs-dist → pdfjs-dist simple
+    // Step 3: Test processPDFBuffer
     diagnostics.steps.processPDFBuffer = { status: 'pending' };
     try {
       const info = await processPDFBuffer(file.name, buffer);
@@ -82,8 +67,10 @@ export async function POST(request: Request) {
         status: 'ok',
         pageCount: info.pageCount,
         textLength: fullText.length,
-        textPreview: fullText.substring(0, 500),
+        textPreview: fullText.substring(0, 2000),
         hasTabs: fullText.includes('\t'),
+        tabCount: (fullText.match(/\t/g) || []).length,
+        lineCount: fullText.split('\n').length,
         perPageTextLengths: info.extractedText.map(p => ({ page: p.page, length: p.text.length })),
       };
     } catch (err: any) {
@@ -94,7 +81,7 @@ export async function POST(request: Request) {
       };
     }
 
-    // Step 5: Test blob upload (if serverless)
+    // Step 4: Test blob upload (if serverless)
     if (isServerless()) {
       diagnostics.steps.blobUpload = { status: 'pending' };
       try {
@@ -120,11 +107,60 @@ export async function POST(request: Request) {
 
 /**
  * GET: Quick diagnostic of the environment and blob storage.
+ * If ?fileName=xxx.pdf is provided, extract and return the text from that blob file.
  */
-export async function GET() {
-  // Apply DOM polyfills before any pdfjs-dist imports
+export async function GET(request: Request) {
   applyDOMPolyfills();
 
+  const { searchParams } = new URL(request.url);
+  const fileName = searchParams.get('fileName');
+
+  // If fileName is provided, extract text from that blob file
+  if (fileName) {
+    try {
+      const info = await processPDF(fileName);
+      const fullText = info.extractedText.map(p => p.text).join('\n');
+      
+      // Also show some analysis
+      const lines = fullText.split('\n');
+      const hasTabs = fullText.includes('\t');
+      const tabLines = lines.filter(l => l.includes('\t'));
+      
+      // Find lines that look like data rows
+      const dateLines = lines.filter(l => /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(l.trim()));
+      const bpuLines = lines.filter(l => /BPU\d+|BNU\d+|BBU\d+/i.test(l));
+      
+      return NextResponse.json({
+        fileName,
+        pageCount: info.pageCount,
+        textLength: fullText.length,
+        hasTabs,
+        tabCount: (fullText.match(/\t/g) || []).length,
+        lineCount: lines.length,
+        tabLineCount: tabLines.length,
+        dateLineCount: dateLines.length,
+        bpuLineCount: bpuLines.length,
+        textPreview: fullText.substring(0, 3000),
+        // Show first 30 lines with tab info
+        linesPreview: lines.slice(0, 30).map((l, i) => ({
+          line: i + 1,
+          tabCount: (l.match(/\t/g) || []).length,
+          text: l.substring(0, 200),
+        })),
+        // Show date-matching lines
+        dateLinesSample: dateLines.slice(0, 5).map(l => l.substring(0, 200)),
+        // Show BPU-matching lines
+        bpuLinesSample: bpuLines.slice(0, 5).map(l => l.substring(0, 200)),
+      });
+    } catch (err: any) {
+      return NextResponse.json({
+        error: `Failed to extract text from ${fileName}`,
+        message: err?.message || String(err),
+      }, { status: 500 });
+    }
+  }
+
+  // Default: environment check
   const diagnostics: Record<string, any> = {
     timestamp: new Date().toISOString(),
     isServerless: isServerless(),
@@ -147,23 +183,11 @@ export async function GET() {
     diagnostics.pdf2json = { loaded: false, error: err?.message };
   }
 
-  // Test pdfjs-dist import
-  try {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    diagnostics.pdfjsDist = {
-      loaded: true,
-      hasGetDocument: typeof pdfjs.getDocument === 'function',
-      version: pdfjs.version || 'unknown',
-    };
-  } catch (err: any) {
-    diagnostics.pdfjsDist = { loaded: false, error: err?.message };
-  }
-
   // Test blob connection
   try {
     const files = await getPDFFiles();
     diagnostics.blobFiles = files.length;
-    diagnostics.blobFileNames = files.slice(0, 5);
+    diagnostics.blobFileNames = files;
   } catch (err: any) {
     diagnostics.blobError = err?.message;
   }
