@@ -144,7 +144,7 @@ model BNUItem {
 
 model BKUMonthDB {
   id               String   @id @default(cuid())
-  fileName         String   @unique
+  fileName         String
   bulan            String   @default("")
   tahun            String   @default("")
   sumberDana       String   @default("")
@@ -159,11 +159,13 @@ model BKUMonthDB {
   transactions     Json     @default("[]")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([bulan, tahun])
 }
 
 model BKUPajakMonthDB {
   id               String   @id @default(cuid())
-  fileName         String   @unique
+  fileName         String
   bulan            String   @default("")
   tahun            String   @default("")
   sumberDana       String   @default("")
@@ -187,11 +189,13 @@ model BKUPajakMonthDB {
   bendahara        String   @default("")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([bulan, tahun])
 }
 
 model RKASMonthDB {
   id               String   @id @default(cuid())
-  fileName         String   @unique
+  fileName         String
   judul            String   @default("")
   bulan            String   @default("")
   tahun            String   @default("")
@@ -209,4 +213,6 @@ model RKASMonthDB {
   allItems         Json     @default("[]")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([bulan, tahun, tipe])
 }

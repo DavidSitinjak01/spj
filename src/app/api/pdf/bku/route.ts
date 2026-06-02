@@ -553,7 +553,7 @@ export async function GET() {
         try {
           // Try DB first
           try {
-            const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
+            const dbRecord = await db.bKUMonthDB.findFirst({ where: { fileName: file } });
             if (dbRecord) {
               months.push(dbRecordToBKUMonth(dbRecord));
               continue;
@@ -569,7 +569,7 @@ export async function GET() {
             // Save to DB for future requests
             try {
               await db.bKUMonthDB.upsert({
-                where: { fileName: file },
+                where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
                 create: dbCreateFromBKUMonth(data),
                 update: dbCreateFromBKUMonth(data),
               });
@@ -591,17 +591,7 @@ export async function GET() {
         return monthOrder.indexOf(a.bulan) - monthOrder.indexOf(b.bulan);
       });
 
-      // Deduplicate in memory (can't delete from blob easily during GET)
-      const seen = new Map<string, BKUMonth>();
-      for (const m of months) {
-        const key = `${m.bulan}_${m.tahun}`;
-        if (!seen.has(key)) {
-          seen.set(key, m);
-        }
-      }
-      const dedupedMonths = Array.from(seen.values());
-
-      return NextResponse.json({ months: dedupedMonths, files, parseErrors: parseErrors.length > 0 ? parseErrors : undefined });
+      return NextResponse.json({ months, files, parseErrors: parseErrors.length > 0 ? parseErrors : undefined });
     }
 
     // Local: read from upload dir
@@ -617,7 +607,7 @@ export async function GET() {
     for (const file of files) {
       // Try DB first
       try {
-        const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
+        const dbRecord = await db.bKUMonthDB.findFirst({ where: { fileName: file } });
         if (dbRecord) {
           months.push(dbRecordToBKUMonth(dbRecord));
           continue;
@@ -632,7 +622,7 @@ export async function GET() {
         // Save to DB for future requests
         try {
           await db.bKUMonthDB.upsert({
-            where: { fileName: file },
+            where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
             create: dbCreateFromBKUMonth(data),
             update: dbCreateFromBKUMonth(data),
           });
@@ -648,29 +638,7 @@ export async function GET() {
       return monthOrder.indexOf(a.bulan) - monthOrder.indexOf(b.bulan);
     });
 
-    // Deduplicate by bulan+tahun (keep last/first, remove older duplicate files)
-    const seen = new Map<string, BKUMonth>();
-    const toDelete: string[] = [];
-    for (const m of months) {
-      const key = `${m.bulan}_${m.tahun}`;
-      if (seen.has(key)) {
-        // Duplicate found — keep the one already seen, mark the other for deletion
-        toDelete.push(m.fileName);
-      } else {
-        seen.set(key, m);
-      }
-    }
-    // Clean up duplicate files from disk + DB
-    for (const fn of toDelete) {
-      const oldPath = path.join(UPLOAD_DIR, fn);
-      const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
-      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${fn}:`, err); }
-      try { await db.bKUMonthDB.delete({ where: { fileName: fn } }); } catch (dbErr) { console.error(`Failed to delete BKU ${fn} from database:`, dbErr); }
-    }
-    const dedupedMonths = Array.from(seen.values());
-
-    return NextResponse.json({ months: dedupedMonths, files });
+    return NextResponse.json({ months, files });
   } catch (error: any) {
     console.error('BKU list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -695,10 +663,10 @@ export async function POST(request: Request) {
       const data = await parseBKUFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
-      // Save to database
+      // Save to database (upsert by composite key bulan+tahun)
       try {
         await db.bKUMonthDB.upsert({
-          where: { fileName: file.name },
+          where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
           create: dbCreateFromBKUMonth(data),
           update: dbCreateFromBKUMonth(data),
         });
@@ -706,40 +674,7 @@ export async function POST(request: Request) {
         console.error('Failed to save BKU to database:', dbErr);
       }
 
-      // Deduplicate: delete other blob BKU files with the same bulan+tahun
-      let replacedFile: string | null = null;
-      if (data.bulan && data.tahun) {
-        const existingFiles = (await getPDFFiles()).filter(f => isBKUFile(f) && f !== file.name);
-        for (const existing of existingFiles) {
-          try {
-            // Try DB first to check month/year
-            const existingDbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: existing } });
-            let matches = false;
-            if (existingDbRecord) {
-              matches = existingDbRecord.bulan === data.bulan && existingDbRecord.tahun === data.tahun;
-            } else {
-              const existingData = await parseBKUFile(existing);
-              if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
-                matches = true;
-              }
-            }
-            if (matches) {
-              replacedFile = existing;
-              await deleteFromBlob(existing);
-              // Delete DB record for replaced file
-              try {
-                await db.bKUMonthDB.delete({ where: { fileName: existing } });
-              } catch (dbErr) {
-                console.error(`Failed to delete replaced BKU ${existing} from database:`, dbErr);
-              }
-            }
-          } catch (err) {
-            console.error(`Error checking existing BKU file ${existing}:`, err);
-          }
-        }
-      }
-
-      return NextResponse.json({ success: true, data, replaced: replacedFile });
+      return NextResponse.json({ success: true, data });
     }
 
     // Local: save to upload dir + process with Python
@@ -749,10 +684,10 @@ export async function POST(request: Request) {
     const data = await parseBKUFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
-    // Save to database
+    // Save to database (upsert by composite key bulan+tahun)
     try {
       await db.bKUMonthDB.upsert({
-        where: { fileName: file.name },
+        where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
         create: dbCreateFromBKUMonth(data),
         update: dbCreateFromBKUMonth(data),
       });
@@ -760,45 +695,7 @@ export async function POST(request: Request) {
       console.error('Failed to save BKU to database:', dbErr);
     }
 
-    // Deduplicate: remove other BKU files with the same bulan+tahun
-    let replacedFile: string | null = null;
-    if (data.bulan && data.tahun) {
-      const existingFiles = fs.readdirSync(UPLOAD_DIR)
-        .filter(f => isBKUFile(f) && f !== file.name);
-      for (const existing of existingFiles) {
-        // Try DB first to check month/year
-        let matches = false;
-        try {
-          const existingDbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: existing } });
-          if (existingDbRecord) {
-            matches = existingDbRecord.bulan === data.bulan && existingDbRecord.tahun === data.tahun;
-          }
-        } catch (dbErr) {
-          console.error(`Failed to check DB for existing BKU ${existing}:`, dbErr);
-        }
-        if (!matches) {
-          const existingData = await parseBKUFile(existing);
-          if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
-            matches = true;
-          }
-        }
-        if (matches) {
-          replacedFile = existing;
-          // Delete the old file and its cache
-          const oldPath = path.join(UPLOAD_DIR, existing);
-          const oldCache = getCacheKey(existing);
-          try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
-          try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${existing}:`, err); }
-          // Delete DB record for replaced file
-          try { await db.bKUMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete replaced BKU ${existing} from database:`, dbErr); }
-        }
-      }
-      // Invalidate cache for new file since we need fresh parse
-      const newCache = getCacheKey(file.name);
-      try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to delete cache for ${file.name}:`, err); }
-    }
-
-    return NextResponse.json({ success: true, data, replaced: replacedFile });
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     console.error('BKU upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -818,7 +715,7 @@ export async function DELETE(request: Request) {
       await deleteFromBlob(fileName);
       // Delete from database
       try {
-        await db.bKUMonthDB.delete({ where: { fileName } });
+        await db.bKUMonthDB.deleteMany({ where: { fileName } });
       } catch (dbErr) {
         console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
       }
@@ -834,7 +731,7 @@ export async function DELETE(request: Request) {
 
     // Delete from database
     try {
-      await db.bKUMonthDB.delete({ where: { fileName } });
+      await db.bKUMonthDB.deleteMany({ where: { fileName } });
     } catch (dbErr) {
       console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
     }

@@ -122,7 +122,7 @@ async function saveBKUPajakToDB(data: BKUPajakMonth): Promise<void> {
   try {
     const dbData = bkuPajakMonthToDB(data);
     await db.bKUPajakMonthDB.upsert({
-      where: { fileName: data.fileName },
+      where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
       update: dbData,
       create: dbData,
     });
@@ -141,7 +141,7 @@ async function deleteBKUPajakFromDB(fileName: string): Promise<void> {
 
 async function getBKUPajakFromDB(fileName: string): Promise<BKUPajakMonth | null> {
   try {
-    const record = await db.bKUPajakMonthDB.findUnique({ where: { fileName } });
+    const record = await db.bKUPajakMonthDB.findFirst({ where: { fileName } });
     if (record) return bkuPajakDBToMonth(record);
     return null;
   } catch (err) {
@@ -879,17 +879,7 @@ export async function GET() {
         return ia - ib;
       });
 
-      // Deduplicate in memory
-      const seen = new Map<string, BKUPajakMonth>();
-      for (const m of months) {
-        const key = `${m.bulan}_${m.tahun}`;
-        if (!seen.has(key)) {
-          seen.set(key, m);
-        }
-      }
-      const dedupedMonths = Array.from(seen.values());
-
-      return NextResponse.json({ months: dedupedMonths, files });
+      return NextResponse.json({ months, files });
     }
 
     // Local: read from upload dir
@@ -932,28 +922,7 @@ export async function GET() {
       return ia - ib;
     });
 
-    // Deduplicate by bulan+tahun (keep first, remove older duplicate files)
-    const seen = new Map<string, BKUPajakMonth>();
-    const toDelete: string[] = [];
-    for (const m of months) {
-      const key = `${m.bulan}_${m.tahun}`;
-      if (seen.has(key)) {
-        toDelete.push(m.fileName);
-      } else {
-        seen.set(key, m);
-      }
-    }
-    // Clean up duplicate files from disk and DB
-    for (const fn of toDelete) {
-      const oldPath = path.join(UPLOAD_DIR, fn);
-      const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
-      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache for ${fn}:`, err); }
-      await deleteBKUPajakFromDB(fn);
-    }
-    const dedupedMonths = Array.from(seen.values());
-
-    return NextResponse.json({ months: dedupedMonths, files });
+    return NextResponse.json({ months, files });
   } catch (error: any) {
     console.error('BKU Pajak list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -978,31 +947,10 @@ export async function POST(request: Request) {
       const data = await parseBKUPajakFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
-      // Save to DB
+      // Save to DB (upsert by composite key bulan+tahun)
       await saveBKUPajakToDB(data);
 
-      // Deduplicate: delete other blob BKU Pajak files with the same bulan+tahun
-      let replacedFile: string | null = null;
-      if (data.bulan && data.tahun) {
-        const existingFiles = (await getPDFFiles()).filter(f => isBKUPajakFile(f) && f !== file.name);
-        for (const existing of existingFiles) {
-          try {
-            // Check DB for existing file data first
-            let existingData = await getBKUPajakFromDB(existing);
-            if (!existingData) {
-              existingData = await parseBKUPajakFile(existing);
-              if (existingData) await saveBKUPajakToDB(existingData);
-            }
-            if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
-              replacedFile = existing;
-              await deleteFromBlob(existing);
-              await deleteBKUPajakFromDB(existing);
-            }
-          } catch (err) { console.error(`Failed to deduplicate ${existing}:`, err); }
-        }
-      }
-
-      return NextResponse.json({ success: true, data, replaced: replacedFile });
+      return NextResponse.json({ success: true, data });
     }
 
     // Local: save to upload dir + process with Python
@@ -1012,38 +960,10 @@ export async function POST(request: Request) {
     const data = await parseBKUPajakFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU Pajak' }, { status: 500 });
 
-    // Save to DB
+    // Save to DB (upsert by composite key bulan+tahun)
     await saveBKUPajakToDB(data);
 
-    // Deduplicate: remove other BKU Pajak files with the same bulan+tahun
-    let replacedFile: string | null = null;
-    if (data.bulan && data.tahun) {
-      const existingFiles = fs.readdirSync(UPLOAD_DIR)
-        .filter(f => isBKUPajakFile(f) && f !== file.name);
-      for (const existing of existingFiles) {
-        try {
-          // Check DB for existing file data first
-          let existingData = await getBKUPajakFromDB(existing);
-          if (!existingData) {
-            existingData = await parseBKUPajakFile(existing);
-            if (existingData) await saveBKUPajakToDB(existingData);
-          }
-          if (existingData && existingData.bulan === data.bulan && existingData.tahun === data.tahun) {
-            replacedFile = existing;
-            const oldPath = path.join(UPLOAD_DIR, existing);
-            const oldCache = getCacheKey(existing);
-            try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
-            try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache for ${existing}:`, err); }
-            await deleteBKUPajakFromDB(existing);
-          }
-        } catch (err) { console.error(`Failed to deduplicate ${existing}:`, err); }
-      }
-      // Invalidate cache for new file
-      const newCache = getCacheKey(file.name);
-      try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to invalidate cache for ${file.name}:`, err); }
-    }
-
-    return NextResponse.json({ success: true, data, replaced: replacedFile });
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     console.error('BKU Pajak upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

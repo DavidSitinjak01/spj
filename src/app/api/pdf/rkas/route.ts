@@ -1340,7 +1340,7 @@ export async function GET() {
     for (const file of files) {
       try {
         // Check DB first to avoid re-parsing
-        const dbRecord = await db.rKASMonthDB.findUnique({ where: { fileName: file } });
+        const dbRecord = await db.rKASMonthDB.findFirst({ where: { fileName: file } });
         if (dbRecord) {
           months.push(dbToRKASMonth(dbRecord));
           continue;
@@ -1352,7 +1352,7 @@ export async function GET() {
           // Save to DB for future requests
           try {
             await db.rKASMonthDB.upsert({
-              where: { fileName: file },
+              where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
               update: rkasMonthToDB(data),
               create: rkasMonthToDB(data),
             });
@@ -1377,46 +1377,16 @@ export async function GET() {
     });
 
     if (isServerless()) {
-      // On serverless, we can't delete duplicates from blob easily, just dedup in memory
-      const seen = new Map<string, RKASMonth>();
-      for (const m of months) {
-        const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `BULANAN_${m.bulan}_${m.tahun}`;
-        if (!seen.has(key)) {
-          seen.set(key, m);
-        }
-      }
-      const dedupedMonths = Array.from(seen.values());
-      const bulanan = dedupedMonths.filter(m => m.tipe === 'bulanan');
-      const tahunan = dedupedMonths.filter(m => m.tipe === 'tahunan');
-      return NextResponse.json({ months: dedupedMonths, bulanan, tahunan, files });
+      const bulanan = months.filter(m => m.tipe === 'bulanan');
+      const tahunan = months.filter(m => m.tipe === 'tahunan');
+      return NextResponse.json({ months, bulanan, tahunan, files });
     }
-
-    // Deduplicate: bulanan by bulan+tahun, tahunan by tahun only
-    const seen = new Map<string, RKASMonth>();
-    const toDelete: string[] = [];
-    for (const m of months) {
-      const key = m.tipe === 'tahunan' ? `TAHUNAN_${m.tahun}` : `BULANAN_${m.bulan}_${m.tahun}`;
-      if (seen.has(key)) {
-        toDelete.push(m.fileName);
-      } else {
-        seen.set(key, m);
-      }
-    }
-    // Clean up duplicate files from disk and DB
-    for (const fn of toDelete) {
-      const oldPath = path.join(UPLOAD_DIR, fn);
-      const oldCache = getCacheKey(fn);
-      try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${fn}:`, err); }
-      try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${fn}:`, err); }
-      try { await db.rKASMonthDB.delete({ where: { fileName: fn } }); } catch (err) { console.error(`Failed to delete DB record for ${fn}:`, err); }
-    }
-    const dedupedMonths = Array.from(seen.values());
 
     // Separate into bulanan and tahunan
-    const bulanan = dedupedMonths.filter(m => m.tipe === 'bulanan');
-    const tahunan = dedupedMonths.filter(m => m.tipe === 'tahunan');
+    const bulanan = months.filter(m => m.tipe === 'bulanan');
+    const tahunan = months.filter(m => m.tipe === 'tahunan');
 
-    return NextResponse.json({ months: dedupedMonths, bulanan, tahunan, files });
+    return NextResponse.json({ months, bulanan, tahunan, files });
   } catch (error: any) {
     console.error('RKAS list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -1467,10 +1437,10 @@ export async function POST(request: Request) {
         hint: 'PDF text extraction may have failed. The diagnostic info above shows which step failed.',
       }, { status: 500 });
 
-      // Save parsed data to DB
+      // Save parsed data to DB (upsert by composite key bulan+tahun+tipe)
       try {
         await db.rKASMonthDB.upsert({
-          where: { fileName: data.fileName },
+          where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
           update: rkasMonthToDB(data),
           create: rkasMonthToDB(data),
         });
@@ -1478,33 +1448,7 @@ export async function POST(request: Request) {
         console.error('Failed to save RKAS to DB:', dbErr);
       }
 
-      // Deduplicate: delete other blob files with same key
-      let replacedFile: string | null = null;
-      const existingFiles = (await getPDFFiles()).filter(f => isRKASFile(f) && f !== file.name);
-      for (const existing of existingFiles) {
-        try {
-          // Check DB first, then parse if needed
-          let existingData: RKASMonth | null = null;
-          const dbRecord = await db.rKASMonthDB.findUnique({ where: { fileName: existing } });
-          if (dbRecord) {
-            existingData = dbToRKASMonth(dbRecord);
-          } else {
-            existingData = await parseRKASFile(existing);
-          }
-          if (!existingData) continue;
-          const isDuplicate = data.tipe === 'tahunan'
-            ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
-            : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
-          if (isDuplicate) {
-            replacedFile = existing;
-            await deleteFromBlob(existing);
-            // Also delete DB record for the replaced file
-            try { await db.rKASMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete DB record for ${existing}:`, dbErr); }
-          }
-        } catch (err) { console.error(`Error deduplicating RKAS file ${existing}:`, err); }
-      }
-
-      return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
+      return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul });
     }
 
     // Local: save to upload dir + process with Python
@@ -1514,10 +1458,10 @@ export async function POST(request: Request) {
     const data = await parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
 
-    // Save parsed data to DB
+    // Save parsed data to DB (upsert by composite key bulan+tahun+tipe)
     try {
       await db.rKASMonthDB.upsert({
-        where: { fileName: data.fileName },
+        where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
         update: rkasMonthToDB(data),
         create: rkasMonthToDB(data),
       });
@@ -1525,33 +1469,7 @@ export async function POST(request: Request) {
       console.error('Failed to save RKAS to DB:', dbErr);
     }
 
-    // Deduplicate: remove other RKAS files with the same key
-    let replacedFile: string | null = null;
-    const existingFiles = fs.readdirSync(UPLOAD_DIR)
-      .filter(f => isRKASFile(f) && f !== file.name);
-    for (const existing of existingFiles) {
-      try {
-        const existingData = await parseRKASFile(existing);
-        if (!existingData) continue;
-        const isDuplicate = data.tipe === 'tahunan'
-          ? existingData.tipe === 'tahunan' && existingData.tahun === data.tahun
-          : existingData.tipe === 'bulanan' && existingData.bulan === data.bulan && existingData.tahun === data.tahun;
-        if (isDuplicate) {
-          replacedFile = existing;
-          const oldPath = path.join(UPLOAD_DIR, existing);
-          const oldCache = getCacheKey(existing);
-          try { fs.unlinkSync(oldPath); } catch (err) { console.error(`Failed to delete file ${existing}:`, err); }
-          try { fs.unlinkSync(oldCache); } catch (err) { console.error(`Failed to delete cache ${existing}:`, err); }
-          // Also delete DB record for the replaced file
-          try { await db.rKASMonthDB.delete({ where: { fileName: existing } }); } catch (dbErr) { console.error(`Failed to delete DB record for ${existing}:`, dbErr); }
-        }
-      } catch (err) { console.error(`Error deduplicating RKAS file ${existing}:`, err); }
-    }
-    // Invalidate cache for new file so next GET parses fresh
-    const newCache = getCacheKey(file.name);
-    try { fs.unlinkSync(newCache); } catch (err) { console.error(`Failed to invalidate cache for ${file.name}:`, err); }
-
-    return NextResponse.json({ success: true, data, replaced: replacedFile, tipe: data.tipe, judul: data.judul });
+    return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul });
   } catch (error: any) {
     console.error('RKAS upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -1567,7 +1485,7 @@ export async function DELETE(request: Request) {
 
     // Delete DB record
     try {
-      await db.rKASMonthDB.delete({ where: { fileName } });
+      await db.rKASMonthDB.deleteMany({ where: { fileName } });
     } catch (dbErr) {
       console.error(`Failed to delete RKAS DB record for ${fileName}:`, dbErr);
     }
