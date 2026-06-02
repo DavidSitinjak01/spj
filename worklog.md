@@ -104,3 +104,24 @@ Stage Summary:
 - Fix: Polyfill DOMMatrix, DOMPoint, DOMRect on globalThis before pdfjs-dist is imported
 - Multiple safety layers: instrumentation.ts (server startup), module-level (pdf-processor.ts), function-level (each extraction function)
 - Deployed as commit b7d57d7 to https://github.com/DavidSitinjak01/spj.git
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix DOMMatrix polyfill - replace broken dommatrix package with working stub
+
+Work Log:
+- Discovered that the 'dommatrix' npm package does NOT export a DOMMatrix class (only utility functions)
+- Removed the broken 'dommatrix' package
+- Created dedicated src/lib/dom-polyfill.ts with minimal but working stub polyfills for DOMMatrix, DOMPoint, DOMRect
+- Tested locally: polyfill stub works - PDF text extraction succeeds with it
+- Added polyfill import to ALL 13 API route files (19 handler functions) that use pdfjs-dist
+- Simplified instrumentation.ts to just import the polyfill module
+- Polyfill applied at 3 layers: instrumentation.ts (server startup), module import (pdf-processor.ts), function call (each handler)
+- Committed as 36ece5d and pushed to GitHub
+
+Stage Summary:
+- Root cause: 'dommatrix' package was broken (no DOMMatrix class exported)
+- Fix: Self-contained stub polyfill that was tested and proven to work for text extraction
+- Coverage: All API routes now have polyfill applied
+- Vercel deployment should now work
