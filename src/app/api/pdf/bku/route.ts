@@ -5,7 +5,10 @@ import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
-import { db } from '@/lib/db';
+import type { BKUMonth, BKUTransaction } from '@/lib/types';
+import { MONTH_ORDER } from '@/lib/types';
+import { parseBKUFromText } from '@/lib/services/pdf-parser';
+import { saveBKUToDB, getAllBKUFromDB, deleteBKUFromDB } from '@/lib/services/db-service';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -13,83 +16,7 @@ if (!isServerless()) {
   try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (err) { console.error('Failed to create cache directory:', err); }
 }
 
-interface BKUTransaction {
-  tanggal: string;
-  kodeKegiatan: string;
-  kodeRekening: string;
-  noBukti: string;
-  uraian: string;
-  penerimaan: number;
-  pengeluaran: number;
-  saldo: number;
-}
-
-interface BKUMonth {
-  fileName: string;
-  bulan: string;
-  tahun: string;
-  sumberDana: string;
-  namaSekolah: string;
-  npsn: string;
-  transactions: BKUTransaction[];
-  totalPenerimaan: number;
-  totalPengeluaran: number;
-  saldoAkhir: number;
-  saldoAkhirBank: number;
-  saldoAkhirTunai: number;
-  tanggalTutup: string;
-}
-
-// --- DB helper functions ---
-function dbRecordToBKUMonth(record: {
-  fileName: string;
-  bulan: string;
-  tahun: string;
-  sumberDana: string;
-  namaSekolah: string;
-  npsn: string;
-  transactions: unknown;
-  totalPenerimaan: bigint;
-  totalPengeluaran: bigint;
-  saldoAkhir: bigint;
-  saldoAkhirBank: bigint;
-  saldoAkhirTunai: bigint;
-  tanggalTutup: string;
-}): BKUMonth {
-  return {
-    fileName: record.fileName,
-    bulan: record.bulan,
-    tahun: record.tahun,
-    sumberDana: record.sumberDana,
-    namaSekolah: record.namaSekolah,
-    npsn: record.npsn,
-    transactions: record.transactions as BKUTransaction[],
-    totalPenerimaan: Number(record.totalPenerimaan),
-    totalPengeluaran: Number(record.totalPengeluaran),
-    saldoAkhir: Number(record.saldoAkhir),
-    saldoAkhirBank: Number(record.saldoAkhirBank),
-    saldoAkhirTunai: Number(record.saldoAkhirTunai),
-    tanggalTutup: record.tanggalTutup,
-  };
-}
-
-function dbCreateFromBKUMonth(data: BKUMonth) {
-  return {
-    fileName: data.fileName,
-    bulan: data.bulan,
-    tahun: data.tahun,
-    sumberDana: data.sumberDana,
-    namaSekolah: data.namaSekolah,
-    npsn: data.npsn,
-    totalPenerimaan: BigInt(data.totalPenerimaan),
-    totalPengeluaran: BigInt(data.totalPengeluaran),
-    saldoAkhir: BigInt(data.saldoAkhir),
-    saldoAkhirBank: BigInt(data.saldoAkhirBank),
-    saldoAkhirTunai: BigInt(data.saldoAkhirTunai),
-    tanggalTutup: data.tanggalTutup,
-    transactions: data.transactions as unknown[],
-  };
-}
+// --- Cache helpers (local mode only) ---
 
 function getCacheKey(fileName: string): string {
   return path.join(CACHE_DIR, `${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}.bku.json`);
@@ -97,265 +24,19 @@ function getCacheKey(fileName: string): string {
 
 function getFileModTime(fileName: string): number {
   if (isServerless()) return 0;
-  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch (err) { console.error('Failed to get file mod time:', err); return 0; }
+  try { return fs.statSync(path.join(UPLOAD_DIR, fileName)).mtimeMs; } catch { return 0; }
 }
 
+// --- Local helper for Python fallback row parsing ---
 function parseAmount(s: string | null | undefined): number {
   if (!s) return 0;
   return parseInt(s.replace(/\./g, '').replace(/,/g, '').trim()) || 0;
 }
 
-// --- Serverless: Parse BKU from extracted text using regex ---
-// Handles BOTH pdfplumber format (local) and pdf2json format (Vercel serverless)
-// pdf2json now produces proper tab-separated columns per line (not all tokens on one line),
-// so we parse tab-separated columns directly within each line.
-function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
-  const headerInfo: Record<string, string> = {};
-
-  // Header extraction
-  const bulanMatch = text.match(/BULAN\s*:\s*(\w+)/i);
-  if (bulanMatch) headerInfo.bulan = bulanMatch[1];
-  const tahunMatch = text.match(/TAHUN\s*:\s*(\d{4})/i);
-  if (tahunMatch) headerInfo.tahun = tahunMatch[1];
-  const bulanTahun = text.match(/BULAN\s*:\s*(\w+)\s+(\d{4})/i);
-  if (bulanTahun) { headerInfo.bulan = bulanTahun[1]; headerInfo.tahun = bulanTahun[2]; }
-
-  if (text.includes('Sumber Dana')) {
-    const sdMatch = text.match(/Sumber Dana\s*:?\s*([^\t\n]+)/i);
-    if (sdMatch) {
-      const val = sdMatch[1].trim();
-      if (val && val !== ':' && !val.includes('No.') && !val.includes('Kode')) headerInfo.sumberDana = val;
-    }
-  }
-
-  const sekolahMatch = text.match(/Nama Sekolah\s*:\s*([^\t\n]+)/i);
-  if (sekolahMatch) {
-    let val = sekolahMatch[1].trim();
-    // Remove "Halaman X dari Y" that sometimes gets appended
-    val = val.replace(/\s*Halaman\s+\d+\s+dari\s+\d+.*$/i, '').trim();
-    headerInfo.namaSekolah = val;
-  }
-  const npsnMatch = text.match(/NPSN\s*:?\s*(\d+)/i);
-  if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
-
-  if (!headerInfo.tahun) {
-    const tahunM = text.match(/:\s*(\d{4})/);
-    if (tahunM) headerInfo.tahun = tahunM[1];
-  }
-
-  // Closing balance
-  const saldoMatch = text.match(/Saldo Buku Kas Umum\s*:?\s*Rp\.?\s*([\d.]+)/i);
-  if (saldoMatch) headerInfo.saldoAkhir = saldoMatch[1].replace(/\./g, '');
-  const bankMatch = text.match(/Saldo Bank\s*:?\s*Rp\.?\s*([\d.]+)/i);
-  if (bankMatch) headerInfo.saldoAkhirBank = bankMatch[1].replace(/\./g, '');
-  const tunaiMatch = text.match(/Saldo Kas Tunai\s*:?\s*Rp\.?\s*([\d.]+)/i);
-  if (tunaiMatch) headerInfo.saldoAkhirTunai = tunaiMatch[1].replace(/\./g, '');
-  const tanggalMatch = text.match(/(\d{1,2}\s+\w+\s+\d{4})/);
-  if (tanggalMatch) headerInfo.tanggalTutup = tanggalMatch[1];
-
-  // --- Extract transaction rows ---
-  const transactions: BKUTransaction[] = [];
-  let totalPenerimaan = 0;
-  let totalPengeluaran = 0;
-  let lastSaldo = 0;
-
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-
-  // Detect format: pdf2json produces tab-separated columns with date at start
-  // Also detect if text has significant tab separation (column detection mode)
-  const isPdf2Json = lines.some(l => {
-    const tabs = l.split('\t').filter(Boolean);
-    if (tabs.length < 3) return false;
-    const first = tabs[0]?.trim();
-    // Match date patterns: dd-mm-yyyy, dd/mm/yyyy, or d-mm-yyyy
-    return /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(first);
-  }) || lines.some(l => {
-    // Fallback: check for tab-separated lines with BKU-specific patterns
-    const tabs = l.split('\t').filter(Boolean);
-    return tabs.length >= 5 && tabs.some(t => /^(BPU|BNU|BBU)\d+$/i.test(t.trim()));
-  });
-
-  // Also treat as pdf2json if text has tabs but no clear pdfplumber format
-  const hasTabs = text.includes('\t');
-  const useTabParsing = isPdf2Json || (hasTabs && !lines.some(l => /^\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\s+/.test(l) && !l.includes('\t')));
-
-  console.log(`[BKU Parser] isPdf2Json=${isPdf2Json}, hasTabs=${hasTabs}, useTabParsing=${useTabParsing}, lines=${lines.length}`);
-
-  if (isPdf2Json || useTabParsing) {
-    // pdf2json format: tab-separated columns
-    // Pattern 1 (with kode kegiatan): tanggal \t kodeKegiatan \t kodeRekening \t [splitPart] \t noBukti \t uraian \t penerimaan \t pengeluaran \t saldo
-    // Pattern 2 (without kode kegiatan): tanggal \t uraian \t penerimaan \t pengeluaran \t saldo
-    const dateRe = /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
-    const kodeKegiatanRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;
-    const kodeRekeningRe = /^5\.\d+\.[\d.]+$/;
-    const noBuktiRe = /^(BPU|BNU|BBU)\d+$/i;
-
-    for (const line of lines) {
-      const upperLine = line.toUpperCase();
-      if (upperLine.startsWith('TANGGAL') || upperLine.startsWith('HALAMAN') || upperLine.startsWith('BULAN') || upperLine.startsWith('TAHUN')) continue;
-      if (upperLine.includes('KODE KEGIATAN') || upperLine.includes('KODE REKENING') || upperLine.includes('NO BUKTI') || upperLine.includes('NO. BUKTI')) continue;
-      if (upperLine.includes('Saldo Buku') || upperLine.includes('Saldo Bank') || upperLine.includes('Saldo Kas')) continue;
-      if (upperLine.includes('KEPALA SEKOLAH') || upperLine.includes('BENDAHARA') || upperLine.includes('NIP')) continue;
-      if (upperLine.includes('HALAMAN') && upperLine.includes('DARI')) continue;
-      if (upperLine.includes('BUKU KAS') || upperLine.includes('MENYETUJUI')) continue;
-      if (/^\d\s*$/.test(line) || /^[1-8]$/.test(line.trim())) continue; // column numbers
-
-      const parts = line.split('\t').map(p => p.replace(/\n/g, '').trim()).filter(Boolean);
-      if (parts.length < 3) continue;
-
-      const firstPart = parts[0];
-
-      // Skip Jumlah/total row
-      if (firstPart.toUpperCase() === 'JUMLAH') continue;
-
-      // Check if first part is a date
-      if (!dateRe.test(firstPart)) continue;
-
-      const tanggal = firstPart;
-      let kodeKegiatan = '';
-      let kodeRekening = '';
-      let noBukti = '';
-      let uraian = '';
-      let penerimaan = 0;
-      let pengeluaran = 0;
-      let saldo = 0;
-
-      // Determine the structure based on the second part
-      let idx = 1;
-
-      // Check if second part is kode kegiatan (xx.xx.xx.)
-      if (idx < parts.length && kodeKegiatanRe.test(parts[idx])) {
-        kodeKegiatan = parts[idx];
-        idx++;
-      }
-
-      // Check if next part is kode rekening (5.x.x.x)
-      if (idx < parts.length && kodeRekeningRe.test(parts[idx])) {
-        kodeRekening = parts[idx];
-        idx++;
-        // Handle split kode rekening (e.g., "5.1.02.02.01.00" + "26")
-        if (idx < parts.length && /^\d{2,4}$/.test(parts[idx]) && kodeRekening.endsWith('0')) {
-          kodeRekening = kodeRekening + parts[idx];
-          idx++;
-        }
-      }
-
-      // Check if next part is no bukti (BPU/BNU/BBU + number)
-      // Sometimes noBukti and uraian are in the same tab part (e.g., "BBU01 Terima Dana BOSP...")
-      if (idx < parts.length) {
-        const noBuktiMergedMatch = parts[idx].match(/^(BPU|BNU|BBU)(\d+)\s+(.+)$/i);
-        if (noBuktiRe.test(parts[idx])) {
-          noBukti = parts[idx];
-          idx++;
-        } else if (noBuktiMergedMatch) {
-          // noBukti and uraian merged in one part
-          noBukti = noBuktiMergedMatch[1] + noBuktiMergedMatch[2];
-          // Replace current part with just the uraian portion
-          parts[idx] = noBuktiMergedMatch[3];
-          // Don't increment idx - the uraian will be picked up next
-        }
-      }
-
-      // Uraian: next non-numeric part
-      if (idx < parts.length && !/^[\d.\s]+$/.test(parts[idx])) {
-        uraian = parts[idx];
-        idx++;
-      }
-
-      // Remaining parts should be amounts (penerimaan, pengeluaran, saldo)
-      // Amounts may be space-separated within a single tab part (e.g., "0  0")
-      // Flatten: split each part by whitespace, then parse all numbers
-      const rawAmountStrings = parts.slice(idx).filter(p => p.trim());
-      const allAmounts: number[] = [];
-      for (const rawPart of rawAmountStrings) {
-        // Split by whitespace and try to parse each as a number
-        const subParts = rawPart.trim().split(/\s+/);
-        for (const sp of subParts) {
-          const val = parseAmount(sp);
-          if (val > 0 || sp.trim() === '0') {
-            allAmounts.push(val);
-          }
-        }
-      }
-
-      // Map amounts to penerimaan, pengeluaran, saldo
-      if (allAmounts.length >= 3) {
-        penerimaan = allAmounts[0];
-        pengeluaran = allAmounts[1];
-        saldo = allAmounts[2];
-      } else if (allAmounts.length === 2) {
-        pengeluaran = allAmounts[0];
-        saldo = allAmounts[1];
-      } else if (allAmounts.length === 1) {
-        saldo = allAmounts[0];
-      }
-
-      if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
-        transactions.push({ tanggal, kodeKegiatan, kodeRekening, noBukti, uraian, penerimaan, pengeluaran, saldo });
-        totalPenerimaan += penerimaan;
-        totalPengeluaran += pengeluaran;
-        lastSaldo = saldo;
-      }
-    }
-  } else {
-    // pdfplumber format: each row is a separate line, columns separated by spaces/tabs
-    const datePattern = /^(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?|\d{1,2})\s+/;
-
-    for (const line of lines) {
-      const upperLine = line.toUpperCase();
-      if (upperLine.startsWith('TANGGAL') || upperLine.startsWith('HALAMAN') || upperLine.startsWith('BULAN') || upperLine.startsWith('TAHUN')) continue;
-      if (upperLine.includes('KODE KEGIATAN') || upperLine.includes('KODE REKENING') || upperLine.includes('NO BUKTI')) continue;
-      if (upperLine.includes('Saldo Buku') || upperLine.includes('Saldo Bank') || upperLine.includes('Saldo Kas')) continue;
-      if (!datePattern.test(line)) continue;
-
-      const parts = line.split(/\s{2,}|\t/).filter(Boolean);
-      if (parts.length < 5) continue;
-      if (parts[0].trim().toUpperCase() === 'JUMLAH') continue;
-
-      const tanggal = parts[0]?.trim() || '';
-      const kodeKegiatan = parts[1]?.trim() || '';
-      const kodeRekening = parts[2]?.trim() || '';
-      const noBukti = parts[3]?.trim() || '';
-      const uraian = parts[4]?.trim() || '';
-      const penerimaan = parseAmount(parts[parts.length - 3]);
-      const pengeluaran = parseAmount(parts[parts.length - 2]);
-      const saldo = parseAmount(parts[parts.length - 1]);
-
-      if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
-        transactions.push({ tanggal, kodeKegiatan, kodeRekening, noBukti, uraian, penerimaan, pengeluaran, saldo });
-        totalPenerimaan += penerimaan;
-        totalPengeluaran += pengeluaran;
-        lastSaldo = saldo;
-      }
-    }
-  }
-
-  const bkuMonth: BKUMonth = {
-    fileName,
-    bulan: headerInfo.bulan || '',
-    tahun: headerInfo.tahun || '',
-    sumberDana: headerInfo.sumberDana || '',
-    namaSekolah: headerInfo.namaSekolah || '',
-    npsn: headerInfo.npsn || '',
-    transactions,
-    totalPenerimaan,
-    totalPengeluaran,
-    saldoAkhir: parseInt(headerInfo.saldoAkhir) || lastSaldo,
-    saldoAkhirBank: parseInt(headerInfo.saldoAkhirBank) || 0,
-    saldoAkhirTunai: parseInt(headerInfo.saldoAkhirTunai) || 0,
-    tanggalTutup: headerInfo.tanggalTutup || '',
-  };
-
-  console.log(`[BKU Parser] Parsed ${fileName}: ${transactions.length} transactions, bulan=${headerInfo.bulan}, tahun=${headerInfo.tahun}, namaSekolah=${headerInfo.namaSekolah}`);
-
-  return bkuMonth;
-}
-
 // --- Parse single BKU file (dual-mode) ---
 async function parseBKUFile(fileName: string, buffer?: Buffer): Promise<BKUMonth | null> {
   if (isServerless()) {
-    // Serverless: parse with pdfjs-dist + regex
-    // If buffer is provided (e.g., right after upload), use it directly
+    // Serverless: parse with pdfjs-dist + shared text parser
     try {
       let info;
       if (buffer) {
@@ -373,7 +54,7 @@ async function parseBKUFile(fileName: string, buffer?: Buffer): Promise<BKUMonth
     }
   }
 
-  // Local: existing Python approach
+  // Local: Python pdfplumber approach with caching
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) return null;
 
@@ -475,7 +156,7 @@ print(json.dumps(result, ensure_ascii=False))
 
   const header = result.header || {};
   const rows = result.rows || [];
-  
+
   const transactions: BKUTransaction[] = [];
   let totalPenerimaan = 0;
   let totalPengeluaran = 0;
@@ -483,7 +164,6 @@ print(json.dumps(result, ensure_ascii=False))
 
   for (const row of rows) {
     const isJumlah = row[0]?.trim() === 'Jumlah';
-    
     const penerimaan = parseAmount(row[5]);
     const pengeluaran = parseAmount(row[6]);
     const saldo = parseAmount(row[7]);
@@ -536,43 +216,39 @@ function isBKUFile(fileName: string): boolean {
   return lower.endsWith('.pdf') && lower.includes('bku') && !lower.includes('pajak');
 }
 
+function writeFileLocal(filePath: string, buffer: Buffer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    fs.writeFile(filePath, buffer, (err) => err ? reject(err) : resolve());
+  });
+}
+
 // GET: List all BKU files and their parsed data
 export async function GET() {
   applyDOMPolyfills();
   try {
-    const monthOrder = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
-
     if (isServerless()) {
-      // Serverless: list from blob, check DB first, only re-parse if no DB record
       const allFiles = await getPDFFiles();
       const files = allFiles.filter(f => isBKUFile(f)).sort();
+
+      // Try DB first - bulk fetch
+      const dbMonths = await getAllBKUFromDB();
+      const dbMap = new Map(dbMonths.map(m => [m.fileName, m]));
 
       const months: BKUMonth[] = [];
       const parseErrors: string[] = [];
       for (const file of files) {
+        const dbRecord = dbMap.get(file);
+        if (dbRecord) {
+          months.push(dbRecord);
+          continue;
+        }
+        // No DB record - parse from blob
         try {
-          // Try DB first
-          try {
-            const dbRecord = await db.bKUMonthDB.findFirst({ where: { fileName: file } });
-            if (dbRecord) {
-              months.push(dbRecordToBKUMonth(dbRecord));
-              continue;
-            }
-          } catch (dbErr: any) {
-            console.error(`DB query failed for BKU ${file}:`, dbErr?.message);
-            parseErrors.push(`DB query failed: ${dbErr?.message}`);
-          }
-          // No DB record - parse from blob
           const data = await parseBKUFile(file);
           if (data) {
             months.push(data);
-            // Save to DB for future requests
             try {
-              await db.bKUMonthDB.upsert({
-                where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
-                create: dbCreateFromBKUMonth(data),
-                update: dbCreateFromBKUMonth(data),
-              });
+              await saveBKUToDB(data);
             } catch (dbErr: any) {
               console.error(`Failed to cache BKU ${file} to database:`, dbErr?.message);
               parseErrors.push(`DB save failed: ${dbErr?.message}`);
@@ -588,7 +264,7 @@ export async function GET() {
       // Sort by month order
       months.sort((a, b) => {
         if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-        return monthOrder.indexOf(a.bulan) - monthOrder.indexOf(b.bulan);
+        return MONTH_ORDER.indexOf(a.bulan as typeof MONTH_ORDER[number]) - MONTH_ORDER.indexOf(b.bulan as typeof MONTH_ORDER[number]);
       });
 
       return NextResponse.json({ months, files, parseErrors: parseErrors.length > 0 ? parseErrors : undefined });
@@ -603,29 +279,23 @@ export async function GET() {
       .filter(f => isBKUFile(f))
       .sort();
 
+    // Try DB first - bulk fetch
+    const dbMonths = await getAllBKUFromDB();
+    const dbMap = new Map(dbMonths.map(m => [m.fileName, m]));
+
     const months: BKUMonth[] = [];
     for (const file of files) {
-      // Try DB first
-      try {
-        const dbRecord = await db.bKUMonthDB.findFirst({ where: { fileName: file } });
-        if (dbRecord) {
-          months.push(dbRecordToBKUMonth(dbRecord));
-          continue;
-        }
-      } catch (dbErr) {
-        console.error(`Failed to read BKU ${file} from database:`, dbErr);
+      const dbRecord = dbMap.get(file);
+      if (dbRecord) {
+        months.push(dbRecord);
+        continue;
       }
       // No DB record - parse from file
       const data = await parseBKUFile(file);
       if (data) {
         months.push(data);
-        // Save to DB for future requests
         try {
-          await db.bKUMonthDB.upsert({
-            where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
-            create: dbCreateFromBKUMonth(data),
-            update: dbCreateFromBKUMonth(data),
-          });
+          await saveBKUToDB(data);
         } catch (dbErr) {
           console.error(`Failed to cache BKU ${file} to database:`, dbErr);
         }
@@ -635,7 +305,7 @@ export async function GET() {
     // Sort by month order
     months.sort((a, b) => {
       if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-      return monthOrder.indexOf(a.bulan) - monthOrder.indexOf(b.bulan);
+      return MONTH_ORDER.indexOf(a.bulan as typeof MONTH_ORDER[number]) - MONTH_ORDER.indexOf(b.bulan as typeof MONTH_ORDER[number]);
     });
 
     return NextResponse.json({ months, files });
@@ -663,18 +333,15 @@ export async function POST(request: Request) {
       const data = await parseBKUFile(file.name, buffer);
       if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
-      // Save to database (upsert by composite key bulan+tahun)
+      let replaced = false;
       try {
-        await db.bKUMonthDB.upsert({
-          where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
-          create: dbCreateFromBKUMonth(data),
-          update: dbCreateFromBKUMonth(data),
-        });
+        const result = await saveBKUToDB(data);
+        replaced = result.replaced;
       } catch (dbErr) {
         console.error('Failed to save BKU to database:', dbErr);
       }
 
-      return NextResponse.json({ success: true, data });
+      return NextResponse.json({ success: true, data, replaced });
     }
 
     // Local: save to upload dir + process with Python
@@ -684,18 +351,15 @@ export async function POST(request: Request) {
     const data = await parseBKUFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse BKU' }, { status: 500 });
 
-    // Save to database (upsert by composite key bulan+tahun)
+    let replaced = false;
     try {
-      await db.bKUMonthDB.upsert({
-        where: { bulan_tahun: { bulan: data.bulan, tahun: data.tahun } },
-        create: dbCreateFromBKUMonth(data),
-        update: dbCreateFromBKUMonth(data),
-      });
+      const result = await saveBKUToDB(data);
+      replaced = result.replaced;
     } catch (dbErr) {
       console.error('Failed to save BKU to database:', dbErr);
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({ success: true, data, replaced });
   } catch (error: any) {
     console.error('BKU upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -711,14 +375,8 @@ export async function DELETE(request: Request) {
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
 
     if (isServerless()) {
-      // Serverless: delete from blob
       await deleteFromBlob(fileName);
-      // Delete from database
-      try {
-        await db.bKUMonthDB.deleteMany({ where: { fileName } });
-      } catch (dbErr) {
-        console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
-      }
+      await deleteBKUFromDB(fileName);
       return NextResponse.json({ success: true });
     }
 
@@ -729,22 +387,11 @@ export async function DELETE(request: Request) {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     if (fs.existsSync(cachePath)) fs.unlinkSync(cachePath);
 
-    // Delete from database
-    try {
-      await db.bKUMonthDB.deleteMany({ where: { fileName } });
-    } catch (dbErr) {
-      console.error(`Failed to delete BKU ${fileName} from database:`, dbErr);
-    }
+    await deleteBKUFromDB(fileName);
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error('BKU delete error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-}
-
-function writeFileLocal(filePath: string, buffer: Buffer): Promise<void> {
-  return new Promise((resolve, reject) => {
-    fs.writeFile(filePath, buffer, (err) => err ? reject(err) : resolve());
-  });
 }
