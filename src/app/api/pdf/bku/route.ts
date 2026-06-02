@@ -548,13 +548,19 @@ export async function GET() {
       const files = allFiles.filter(f => isBKUFile(f)).sort();
 
       const months: BKUMonth[] = [];
+      const parseErrors: string[] = [];
       for (const file of files) {
         try {
           // Try DB first
-          const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
-          if (dbRecord) {
-            months.push(dbRecordToBKUMonth(dbRecord));
-            continue;
+          try {
+            const dbRecord = await db.bKUMonthDB.findUnique({ where: { fileName: file } });
+            if (dbRecord) {
+              months.push(dbRecordToBKUMonth(dbRecord));
+              continue;
+            }
+          } catch (dbErr: any) {
+            console.error(`DB query failed for BKU ${file}:`, dbErr?.message);
+            parseErrors.push(`DB query failed: ${dbErr?.message}`);
           }
           // No DB record - parse from blob
           const data = await parseBKUFile(file);
@@ -567,11 +573,14 @@ export async function GET() {
                 create: dbCreateFromBKUMonth(data),
                 update: dbCreateFromBKUMonth(data),
               });
-            } catch (dbErr) {
-              console.error(`Failed to cache BKU ${file} to database:`, dbErr);
+            } catch (dbErr: any) {
+              console.error(`Failed to cache BKU ${file} to database:`, dbErr?.message);
+              parseErrors.push(`DB save failed: ${dbErr?.message}`);
             }
+          } else {
+            parseErrors.push(`parseBKUFile returned null for ${file}`);
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error(`Error parsing BKU file ${file}:`, err);
         }
       }
@@ -592,7 +601,7 @@ export async function GET() {
       }
       const dedupedMonths = Array.from(seen.values());
 
-      return NextResponse.json({ months: dedupedMonths, files });
+      return NextResponse.json({ months: dedupedMonths, files, parseErrors: parseErrors.length > 0 ? parseErrors : undefined });
     }
 
     // Local: read from upload dir
