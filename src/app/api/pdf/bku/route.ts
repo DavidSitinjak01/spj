@@ -241,9 +241,19 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
       }
 
       // Check if next part is no bukti (BPU/BNU/BBU + number)
-      if (idx < parts.length && noBuktiRe.test(parts[idx])) {
-        noBukti = parts[idx];
-        idx++;
+      // Sometimes noBukti and uraian are in the same tab part (e.g., "BBU01 Terima Dana BOSP...")
+      if (idx < parts.length) {
+        const noBuktiMergedMatch = parts[idx].match(/^(BPU|BNU|BBU)(\d+)\s+(.+)$/i);
+        if (noBuktiRe.test(parts[idx])) {
+          noBukti = parts[idx];
+          idx++;
+        } else if (noBuktiMergedMatch) {
+          // noBukti and uraian merged in one part
+          noBukti = noBuktiMergedMatch[1] + noBuktiMergedMatch[2];
+          // Replace current part with just the uraian portion
+          parts[idx] = noBuktiMergedMatch[3];
+          // Don't increment idx - the uraian will be picked up next
+        }
       }
 
       // Uraian: next non-numeric part
@@ -253,16 +263,31 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
       }
 
       // Remaining parts should be amounts (penerimaan, pengeluaran, saldo)
-      const amountParts = parts.slice(idx).filter(p => p.trim());
-      if (amountParts.length >= 3) {
-        penerimaan = parseAmount(amountParts[0]);
-        pengeluaran = parseAmount(amountParts[1]);
-        saldo = parseAmount(amountParts[2]);
-      } else if (amountParts.length === 2) {
-        pengeluaran = parseAmount(amountParts[0]);
-        saldo = parseAmount(amountParts[1]);
-      } else if (amountParts.length === 1) {
-        saldo = parseAmount(amountParts[0]);
+      // Amounts may be space-separated within a single tab part (e.g., "0  0")
+      // Flatten: split each part by whitespace, then parse all numbers
+      const rawAmountStrings = parts.slice(idx).filter(p => p.trim());
+      const allAmounts: number[] = [];
+      for (const rawPart of rawAmountStrings) {
+        // Split by whitespace and try to parse each as a number
+        const subParts = rawPart.trim().split(/\s+/);
+        for (const sp of subParts) {
+          const val = parseAmount(sp);
+          if (val > 0 || sp.trim() === '0') {
+            allAmounts.push(val);
+          }
+        }
+      }
+
+      // Map amounts to penerimaan, pengeluaran, saldo
+      if (allAmounts.length >= 3) {
+        penerimaan = allAmounts[0];
+        pengeluaran = allAmounts[1];
+        saldo = allAmounts[2];
+      } else if (allAmounts.length === 2) {
+        pengeluaran = allAmounts[0];
+        saldo = allAmounts[1];
+      } else if (allAmounts.length === 1) {
+        saldo = allAmounts[0];
       }
 
       if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
