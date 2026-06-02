@@ -86,10 +86,9 @@ function isBKUPajakFile(fileName: string): boolean {
 
 // --- Serverless: Parse BKU Pajak from extracted text using regex ---
 // Handles BOTH pdfplumber format (local) and pdf2json format (Vercel serverless)
-// pdf2json produces very long lines with many tab-separated values,
-// so we need to scan through a flat token array to find row boundaries.
+// pdf2json now produces proper tab-separated columns per line,
+// so we parse tab-separated columns directly within each line.
 function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | null {
-  // --- Extract header info ---
   const headerInfo: Record<string, string> = {};
 
   const bulanMatch = text.match(/BULAN\s*:\s*(\w+)/i);
@@ -102,7 +101,11 @@ function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | 
   const npsnMatch = text.match(/NPSN\s*:?\s*(\d+)/i);
   if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
   const sekolahMatch = text.match(/Nama Sekolah\s*:\s*([^\t\n]+)/i);
-  if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+  if (sekolahMatch) {
+    let val = sekolahMatch[1].trim();
+    val = val.replace(/\s*Halaman\s+\d+\s+dari\s+\d+.*$/i, '').trim();
+    headerInfo.namaSekolah = val;
+  }
   const alamatMatch = text.match(/Desa\/Kecamatan\s*:\s*([^\t\n]+)/i);
   if (alamatMatch) headerInfo.alamat = alamatMatch[1].trim();
   const kabMatch = text.match(/Kabupaten\s*\/?\s*Kota\s*:\s*([^\t\n]+)/i);
@@ -140,183 +143,125 @@ function parseBKUPajakFromText(text: string, fileName: string): BKUPajakMonth | 
   const jenisPajakMap = new Map<string, { nama: string; totalPenerimaan: number; totalPengeluaran: number; jumlahTransaksi: number }>();
 
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const isPdf2Json = lines.some(l => l.split('\t').length > 20);
+
+  // Detect format: pdf2json produces tab-separated columns with date at start
+  const isPdf2Json = lines.some(l => {
+    const tabs = l.split('\t');
+    return tabs.length >= 5 && /^\d{2}-\d{2}-\d{4}/.test(tabs[0]?.trim());
+  });
 
   if (isPdf2Json) {
-    // pdf2json format: scan through ALL tab-separated tokens
-    // BKU Pajak row pattern:
-    //   tanggal(DD-MM-YYYY) → noKode(xx.xx.xx.) → uraian(1-3 tokens) → ppn → pph21 → pph23 → pph4 → sspd → pengeluaran → saldo
-    //   Multi-line uraians have continuation tokens between uraian start and the numeric values
-
-    const allTokens: string[] = [];
-    for (const line of lines) {
-      allTokens.push(...line.split('\t'));
-    }
-
+    // pdf2json format: tanggal \t noKode \t uraian \t ppn \t pph21 \t [extra] \t pph23 \t pph4 \t sspd \t pengeluaran \t saldo
+    // There might be an extra column between pph21 and pph23 from the header layout
     const dateRe = /^\d{2}-\d{2}-\d{4}$/;
-    const noKodeRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;   // 05.08.10. or 06.05.08.
-    const amountRe = /^[\s\d.]+$/;
-    const isAmount = (s: string) => {
-      const t = s.trim();
-      return amountRe.test(t) && t.length > 0 && (t === '0' || /^\d/.test(t));
-    };
+    const noKodeRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;
 
-    // Skip tokens that are clearly header/footer
-    const skipTokens = new Set(['TANGGAL', 'NO. KODE', 'URAIAN', 'SALDO', 'JUMLAH',
-      'PENERIMAAN', 'DEBIT', 'PENGELUARAN', 'KREDIT', 'PPN', 'PPh 21', 'PPh 23', 'PPh 4', 'SSPD',
-      'ARAN/KREDIT', 'KODE']);
+    for (const line of lines) {
+      const upperLine = line.toUpperCase();
+      if (upperLine.startsWith('TANGGAL') || upperLine.startsWith('HALAMAN') || upperLine.startsWith('BULAN') || upperLine.startsWith('TAHUN')) continue;
+      if (upperLine.includes('NO. KODE') || upperLine.includes('URAIAN') || upperLine.includes('PENERIMAAN')) continue;
+      if (upperLine.includes('KEPALA SEKOLAH') || upperLine.includes('BENDAHARA') || upperLine.includes('NIP')) continue;
+      if (upperLine.includes('MENYETUJUI') || upperLine.includes('BUKU PEMBANTU')) continue;
+      if (upperLine.includes('DESA') || upperLine.includes('KABUPATEN') || upperLine.includes('PROVINSI')) continue;
+      if (upperLine.includes('HALAMAN') && upperLine.includes('DARI')) continue;
+      if (upperLine.includes('NPSN') || upperLine.includes('NAMA SEKOLAH') || upperLine.includes('SUMBER DANA')) continue;
 
-    let i = 0;
-    while (i < allTokens.length) {
-      const token = allTokens[i].trim();
+      const parts = line.split('\t').map(p => p.replace(/\n/g, '').trim()).filter(Boolean);
 
-      // Skip known non-data tokens
-      if (!token || skipTokens.has(token.toUpperCase()) ||
-          token.toUpperCase().startsWith('HALAMAN') || token.toUpperCase().startsWith('BKU PEMBANTU') ||
-          token.toUpperCase().includes('KODE') && token.toUpperCase().includes('URAIAN') ||
-          token.toUpperCase().includes('BUKU PEMBANTU') || token.toUpperCase().includes('MENYETUJUI') ||
-          token.toUpperCase().includes('KEPALA SEKOLAH') || token.toUpperCase().includes('BENDAHARA') ||
-          token.toUpperCase().includes('NIP') || token.toUpperCase().includes('NPSN') ||
-          token.toUpperCase().includes('NAMA SEKOLAH') || token.toUpperCase().includes('SUMBER DANA') ||
-          token.toUpperCase().includes('DESA') || token.toUpperCase().includes('KABUPATEN') ||
-          token.toUpperCase().includes('PROVINSI') || token.toUpperCase().includes('KEC.') ||
-          token.toUpperCase().includes('KAB.') || token.toUpperCase().includes('PROV.') ||
-          token.includes('Halaman') || token.includes('dari') ||
-          token.match(/^[1-8]$/) // column numbers 1-8
-      ) {
-        i++;
-        continue;
-      }
-
-      // Check for Jumlah row
-      if (token.toUpperCase() === 'JUMLAH') {
-        // Find the next 7 amount tokens after "Jumlah"
-        const jumlahAmounts: number[] = [];
-        let j = i + 1;
-        while (j < allTokens.length && jumlahAmounts.length < 7) {
-          const t = allTokens[j].trim();
-          if (isAmount(t)) {
-            jumlahAmounts.push(parseAmount(t));
-          }
-          j++;
-        }
-        if (jumlahAmounts.length >= 7) {
-          totalPPN = jumlahAmounts[0];
-          totalPPh21 = jumlahAmounts[1];
-          totalPPh23 = jumlahAmounts[2];
-          totalPPh4 = jumlahAmounts[3];
-          totalSSPD = jumlahAmounts[4];
-          totalPengeluaran = jumlahAmounts[5];
-          saldoAkhir = jumlahAmounts[6];
+      // Handle Jumlah/total row
+      if (parts[0]?.toUpperCase() === 'JUMLAH') {
+        // Find amounts: ppn, pph21, [extra], pph23, pph4, sspd, pengeluaran, saldo
+        const amounts = parts.slice(1).filter(p => /^[\d.\s]+$/.test(p.trim()) || p.trim() === '0');
+        if (amounts.length >= 7) {
+          totalPPN = parseAmount(amounts[0]);
+          totalPPh21 = parseAmount(amounts[1]);
+          totalPPh23 = parseAmount(amounts[2]);
+          totalPPh4 = parseAmount(amounts[3]);
+          totalSSPD = parseAmount(amounts[4]);
+          totalPengeluaran = parseAmount(amounts[5]);
+          saldoAkhir = parseAmount(amounts[6]);
           totalPenerimaan = totalPPN + totalPPh21 + totalPPh23 + totalPPh4 + totalSSPD;
         }
-        i = j;
         continue;
       }
 
-      // Check if current token is a date (start of a row)
-      if (dateRe.test(token)) {
-        const tanggal = token;
-        let noKode = '';
-        let j = i + 1;
+      // Data row: must start with a date
+      if (!dateRe.test(parts[0])) continue;
 
-        // Next should be noKode
-        if (j < allTokens.length && noKodeRe.test(allTokens[j].trim())) {
-          noKode = allTokens[j].trim();
-          j++;
-        }
+      const tanggal = parts[0];
+      let noKode = '';
+      let uraian = '';
+      let ppn = 0, pph21 = 0, pph23 = 0, pph4 = 0, sspd = 0, pengeluaran = 0, saldo = 0;
 
-        // Uraian: collect tokens until we hit a sequence of amounts
-        // BKU Pajak has 7 amount columns: ppn, pph21, pph23, pph4, sspd, pengeluaran, saldo
-        const uraianParts: string[] = [];
-        let ppn = 0, pph21 = 0, pph23 = 0, pph4 = 0, sspd = 0, pengeluaran = 0, saldo = 0;
+      let idx = 1;
 
-        // Scan ahead looking for 7 consecutive amount-like tokens
-        // Try from different starting points to handle multi-line uraians
-        let foundAmounts = false;
-        while (j < allTokens.length && !foundAmounts) {
-          // Check if the next 7 tokens from position j look like amounts
-          if (j + 6 < allTokens.length) {
-            const next7 = allTokens.slice(j, j + 7).map(t => t.trim());
-            const allAmounts = next7.every(t => isAmount(t));
-            if (allAmounts) {
-              ppn = parseAmount(next7[0]);
-              pph21 = parseAmount(next7[1]);
-              pph23 = parseAmount(next7[2]);
-              pph4 = parseAmount(next7[3]);
-              sspd = parseAmount(next7[4]);
-              pengeluaran = parseAmount(next7[5]);
-              saldo = parseAmount(next7[6]);
-              j += 7;
-              foundAmounts = true;
-              break;
-            }
-          }
-          // Also try with 6 amounts (sometimes saldo is on a separate line)
-          if (j + 5 < allTokens.length && !foundAmounts) {
-            const next6 = allTokens.slice(j, j + 6).map(t => t.trim());
-            const allAmounts6 = next6.every(t => isAmount(t));
-            if (allAmounts6) {
-              ppn = parseAmount(next6[0]);
-              pph21 = parseAmount(next6[1]);
-              pph23 = parseAmount(next6[2]);
-              pph4 = parseAmount(next6[3]);
-              sspd = parseAmount(next6[4]);
-              pengeluaran = parseAmount(next6[5]);
-              // saldo might be the next token
-              if (j + 6 < allTokens.length && isAmount(allTokens[j + 6].trim())) {
-                saldo = parseAmount(allTokens[j + 6].trim());
-                j += 7;
-              } else {
-                j += 6;
-              }
-              foundAmounts = true;
-              break;
-            }
-          }
-          uraianParts.push(allTokens[j].trim());
-          j++;
-          if (uraianParts.length > 15) break; // Safety
-        }
-
-        const uraian = uraianParts.join(' ').trim();
-
-        let jenisTransaksi: 'Terima' | 'Setor' | 'Lainnya' = 'Lainnya';
-        if (uraian.toLowerCase().startsWith('terima')) jenisTransaksi = 'Terima';
-        else if (uraian.toLowerCase().startsWith('setor')) jenisTransaksi = 'Setor';
-
-        transactions.push({
-          tanggal, noKode, uraian, ppn, pph21, pph23, pph4, sspd, pengeluaran, saldo, jenisTransaksi,
-        });
-
-        // Aggregate by noKode
-        if (noKode) {
-          const existing = jenisPajakMap.get(noKode);
-          if (existing) {
-            existing.totalPenerimaan += ppn + pph21 + pph23 + pph4 + sspd;
-            existing.totalPengeluaran += pengeluaran;
-            existing.jumlahTransaksi += 1;
-          } else {
-            let cleanNama = uraian
-              .replace(/^Terima\s+(PPN\s+|PPh\s+)?/i, '')
-              .replace(/^Setor\s+(PPN\s+|PPh\s+)?/i, '')
-              .replace(/\s*\(.*?\)\s*/g, '')
-              .trim();
-            if (!cleanNama) cleanNama = uraian.trim();
-            jenisPajakMap.set(noKode, {
-              nama: cleanNama,
-              totalPenerimaan: ppn + pph21 + pph23 + pph4 + sspd,
-              totalPengeluaran: pengeluaran,
-              jumlahTransaksi: 1,
-            });
-          }
-        }
-
-        i = j;
-        continue;
+      // Check for noKode (xx.xx.xx. pattern)
+      if (idx < parts.length && noKodeRe.test(parts[idx])) {
+        noKode = parts[idx];
+        idx++;
       }
 
-      i++;
+      // Uraian: next non-amount part
+      if (idx < parts.length && !/^[\d.\s]+$/.test(parts[idx])) {
+        uraian = parts[idx];
+        idx++;
+      }
+
+      // Remaining parts are amounts
+      // Expected: ppn, pph21, [possible extra], pph23, pph4, sspd, pengeluaran, saldo
+      const amountParts = parts.slice(idx).map(p => p.trim()).filter(p => p);
+      const numericParts = amountParts.filter(p => /^[\d.]+$/.test(p) || p === '0');
+
+      if (numericParts.length >= 7) {
+        // 7 amounts: ppn, pph21, pph23, pph4, sspd, pengeluaran, saldo
+        ppn = parseAmount(numericParts[0]);
+        pph21 = parseAmount(numericParts[1]);
+        pph23 = parseAmount(numericParts[2]);
+        pph4 = parseAmount(numericParts[3]);
+        sspd = parseAmount(numericParts[4]);
+        pengeluaran = parseAmount(numericParts[5]);
+        saldo = parseAmount(numericParts[6]);
+      } else if (numericParts.length >= 5) {
+        // Fewer amounts - try to assign what we have
+        ppn = parseAmount(numericParts[0]);
+        if (numericParts.length > 1) pph21 = parseAmount(numericParts[1]);
+        if (numericParts.length > 2) pph23 = parseAmount(numericParts[2]);
+        if (numericParts.length > 3) pph4 = parseAmount(numericParts[3]);
+        if (numericParts.length > 4) sspd = parseAmount(numericParts[4]);
+        if (numericParts.length > 5) pengeluaran = parseAmount(numericParts[5]);
+        if (numericParts.length > 6) saldo = parseAmount(numericParts[6]);
+      }
+
+      let jenisTransaksi: 'Terima' | 'Setor' | 'Lainnya' = 'Lainnya';
+      if (uraian.toLowerCase().startsWith('terima')) jenisTransaksi = 'Terima';
+      else if (uraian.toLowerCase().startsWith('setor')) jenisTransaksi = 'Setor';
+
+      transactions.push({
+        tanggal, noKode, uraian, ppn, pph21, pph23, pph4, sspd, pengeluaran, saldo, jenisTransaksi,
+      });
+
+      // Aggregate by noKode
+      if (noKode) {
+        const existing = jenisPajakMap.get(noKode);
+        if (existing) {
+          existing.totalPenerimaan += ppn + pph21 + pph23 + pph4 + sspd;
+          existing.totalPengeluaran += pengeluaran;
+          existing.jumlahTransaksi += 1;
+        } else {
+          let cleanNama = uraian
+            .replace(/^Terima\s+(PPN\s+|PPh\s+)?/i, '')
+            .replace(/^Setor\s+(PPN\s+|PPh\s+)?/i, '')
+            .replace(/\s*\(.*?\)\s*/g, '')
+            .trim();
+          if (!cleanNama) cleanNama = uraian.trim();
+          jenisPajakMap.set(noKode, {
+            nama: cleanNama,
+            totalPenerimaan: ppn + pph21 + pph23 + pph4 + sspd,
+            totalPengeluaran: pengeluaran,
+            jumlahTransaksi: 1,
+          });
+        }
+      }
     }
   } else {
     // pdfplumber format: each row is a separate line

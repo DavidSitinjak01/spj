@@ -55,13 +55,12 @@ function parseAmount(s: string | null | undefined): number {
 
 // --- Serverless: Parse BKU from extracted text using regex ---
 // Handles BOTH pdfplumber format (local) and pdf2json format (Vercel serverless)
-// pdf2json produces very long lines with many tab-separated values,
-// so we need to scan through a flat token array to find row boundaries.
+// pdf2json now produces proper tab-separated columns per line (not all tokens on one line),
+// so we parse tab-separated columns directly within each line.
 function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
-  // --- Extract header info ---
   const headerInfo: Record<string, string> = {};
 
-  // Header extraction works on the raw text regardless of format
+  // Header extraction
   const bulanMatch = text.match(/BULAN\s*:\s*(\w+)/i);
   if (bulanMatch) headerInfo.bulan = bulanMatch[1];
   const tahunMatch = text.match(/TAHUN\s*:\s*(\d{4})/i);
@@ -78,7 +77,12 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
   }
 
   const sekolahMatch = text.match(/Nama Sekolah\s*:\s*([^\t\n]+)/i);
-  if (sekolahMatch) headerInfo.namaSekolah = sekolahMatch[1].trim();
+  if (sekolahMatch) {
+    let val = sekolahMatch[1].trim();
+    // Remove "Halaman X dari Y" that sometimes gets appended
+    val = val.replace(/\s*Halaman\s+\d+\s+dari\s+\d+.*$/i, '').trim();
+    headerInfo.namaSekolah = val;
+  }
   const npsnMatch = text.match(/NPSN\s*:?\s*(\d+)/i);
   if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
 
@@ -103,197 +107,104 @@ function parseBKUFromText(text: string, fileName: string): BKUMonth | null {
   let totalPengeluaran = 0;
   let lastSaldo = 0;
 
-  // Detect format: pdf2json produces very long lines with many tabs
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const isPdf2Json = lines.some(l => l.split('\t').length > 20);
+
+  // Detect format: pdf2json produces tab-separated columns with date at start
+  const isPdf2Json = lines.some(l => {
+    const tabs = l.split('\t');
+    return tabs.length >= 5 && /^\d{2}-\d{2}-\d{4}/.test(tabs[0]?.trim());
+  });
 
   if (isPdf2Json) {
-    // pdf2json format: scan through ALL tab-separated tokens
-    // BKU Tunai row pattern (with kode kegiatan):
-    //   kodeKegiatan(5.x.x.x.x) → tanggal(DD-MM-YYYY) → kodeRekening(xx.xx.xx.) → noBukti(BPUxx) → uraian → penerimaan → pengeluaran → saldo → optionalLineNumber
-    // BKU Tunai row pattern (without kode kegiatan, e.g. Saldo/Tarik Tunai):
-    //   tanggal(DD-MM-YYYY) → uraian → penerimaan → pengeluaran → saldo
+    // pdf2json format: tab-separated columns
+    // Pattern 1 (with kode kegiatan): tanggal \t kodeKegiatan \t kodeRekening \t [splitPart] \t noBukti \t uraian \t penerimaan \t pengeluaran \t saldo
+    // Pattern 2 (without kode kegiatan): tanggal \t uraian \t penerimaan \t pengeluaran \t saldo
+    const dateRe = /^\d{2}-\d{2}-\d{4}$/;
+    const kodeKegiatanRe = /^\d{2}\.\d{2}\.\d{2}\.?$/;
+    const kodeRekeningRe = /^5\.\d+\.[\d.]+$/;
+    const noBuktiRe = /^(BPU|BNU|BBU)\d+$/i;
 
-    const allTokens: string[] = [];
     for (const line of lines) {
-      allTokens.push(...line.split('\t'));
-    }
+      const upperLine = line.toUpperCase();
+      if (upperLine.startsWith('TANGGAL') || upperLine.startsWith('HALAMAN') || upperLine.startsWith('BULAN') || upperLine.startsWith('TAHUN')) continue;
+      if (upperLine.includes('KODE KEGIATAN') || upperLine.includes('KODE REKENING') || upperLine.includes('NO BUKTI') || upperLine.includes('NO. BUKTI')) continue;
+      if (upperLine.includes('Saldo Buku') || upperLine.includes('Saldo Bank') || upperLine.includes('Saldo Kas')) continue;
+      if (upperLine.includes('KEPALA SEKOLAH') || upperLine.includes('BENDAHARA') || upperLine.includes('NIP')) continue;
+      if (upperLine.includes('HALAMAN') && upperLine.includes('DARI')) continue;
+      if (upperLine.includes('BUKU KAS') || upperLine.includes('MENYETUJUI')) continue;
+      if (/^\d\s*$/.test(line) || /^[1-8]$/.test(line.trim())) continue; // column numbers
 
-    // Patterns
-    const kodeKegiatanRe = /^5\.\d+\.[\d.]+$/;  // 5.1.02.01.01.0052
-    const dateRe = /^\d{2}-\d{2}-\d{4}$/;        // 05-03-2026
-    const kodeRekeningRe = /^\d{2}\.\d{2}\.\d{2}\.?$/; // 06.05.08. or 03.03.21.
-    const noBuktiRe = /^BPU\d+$/i;               // BPU01, BPU03
-    const amountRe = /^[\s\d.]+$/;                // 11.776.250 or 0
-    const lineNumberRe = /^\d{1,2}$/;             // 24, 26, 31 (page line numbers)
+      const parts = line.split('\t').map(p => p.replace(/\n/g, '').trim()).filter(Boolean);
+      if (parts.length < 3) continue;
 
-    let i = 0;
-    while (i < allTokens.length) {
-      const token = allTokens[i].trim();
+      const firstPart = parts[0];
 
-      // Skip known non-data tokens
-      if (!token || token === '1' || token === '2' || token === '3' || token === '4' ||
-          token === '5' || token === '6' || token === '7' || token === '8' ||
-          token.toUpperCase() === 'TANGGAL' || token.toUpperCase() === 'KODE' ||
-          token.toUpperCase() === 'KEGIATAN' || token.toUpperCase() === 'REKENING' ||
-          token.toUpperCase() === 'NO. BUKTI' || token.toUpperCase() === 'URAIAN' ||
-          token.toUpperCase() === 'PENERIMAAN' || token.toUpperCase() === 'PENGELUARAN' ||
-          token.toUpperCase() === 'SALDO' || token.toUpperCase() === 'JUMLAH' ||
-          token.toUpperCase().startsWith('HALAMAN') || token.toUpperCase().startsWith('BKU PEMBANTU') ||
-          token.toUpperCase().includes('KODE KEGIATAN') || token.toUpperCase().includes('KODE REKENING') ||
-          token.toUpperCase().includes('NO BUKTI') || token.toUpperCase().includes('SUMBER DANA') ||
-          token.toUpperCase().includes('DESA/KECAMATAN') || token.toUpperCase().includes('KABUPATEN') ||
-          token.toUpperCase().includes('PROVINSI') || token.toUpperCase().includes('NPSN') ||
-          token.toUpperCase().includes('NAMA SEKOLAH') || token.toUpperCase().includes('BUKU KAS') ||
-          token.toUpperCase().includes('MENYETUJUI') || token.toUpperCase().includes('KEPALA SEKOLAH') ||
-          token.toUpperCase().includes('BENDAHARA') || token.toUpperCase().includes('NIP') ||
-          token.toUpperCase().startsWith('DESA') || token.toUpperCase().includes('KEC.') ||
-          token.toUpperCase().includes('KAB.') || token.toUpperCase().includes('PROV.') ||
-          token.includes('Halaman') || token.includes('dari')) {
-        i++;
-        continue;
+      // Skip Jumlah/total row
+      if (firstPart.toUpperCase() === 'JUMLAH') continue;
+
+      // Check if first part is a date
+      if (!dateRe.test(firstPart)) continue;
+
+      const tanggal = firstPart;
+      let kodeKegiatan = '';
+      let kodeRekening = '';
+      let noBukti = '';
+      let uraian = '';
+      let penerimaan = 0;
+      let pengeluaran = 0;
+      let saldo = 0;
+
+      // Determine the structure based on the second part
+      let idx = 1;
+
+      // Check if second part is kode kegiatan (xx.xx.xx.)
+      if (idx < parts.length && kodeKegiatanRe.test(parts[idx])) {
+        kodeKegiatan = parts[idx];
+        idx++;
       }
 
-      // Check if current token is a kode kegiatan (start of a row with kode kegiatan)
-      if (kodeKegiatanRe.test(token)) {
-        const kodeKegiatan = token;
-        // Next should be a date
-        if (i + 1 < allTokens.length && dateRe.test(allTokens[i + 1].trim())) {
-          const tanggal = allTokens[i + 1].trim();
-          let kodeRekening = '';
-          let noBukti = '';
-          let uraian = '';
-          let penerimaan = 0;
-          let pengeluaran = 0;
-          let saldo = 0;
-          let j = i + 2;
-
-          // Check for kode rekening
-          if (j < allTokens.length && kodeRekeningRe.test(allTokens[j].trim())) {
-            kodeRekening = allTokens[j].trim();
-            j++;
-          }
-
-          // Check for no bukti
-          if (j < allTokens.length && noBuktiRe.test(allTokens[j].trim())) {
-            noBukti = allTokens[j].trim();
-            j++;
-          }
-
-          // Uraian: collect tokens until we hit amounts
-          const uraianParts: string[] = [];
-          while (j < allTokens.length) {
-            const t = allTokens[j].trim();
-            // Check if this looks like an amount (number with dots)
-            if (amountRe.test(t) && t.replace(/[\s.]/g, '').length > 0) {
-              const num = parseAmount(t);
-              if (num > 0 || t.trim() === '0') {
-                // This is the first amount (penerimaan)
-                penerimaan = num;
-                j++;
-                // Next: pengeluaran
-                if (j < allTokens.length) {
-                  pengeluaran = parseAmount(allTokens[j].trim());
-                  j++;
-                }
-                // Next: saldo
-                if (j < allTokens.length) {
-                  saldo = parseAmount(allTokens[j].trim());
-                  j++;
-                }
-                // Skip optional line number after saldo
-                if (j < allTokens.length && lineNumberRe.test(allTokens[j].trim())) {
-                  // Could be a line number, but also could be next row's start
-                  // Only skip if it's a small number (1-50)
-                  const possibleNum = parseInt(allTokens[j].trim());
-                  if (possibleNum > 0 && possibleNum <= 50) {
-                    j++;
-                  }
-                }
-                break;
-              }
-            }
-            uraianParts.push(t);
-            j++;
-            // Safety: don't collect more than 10 tokens for uraian
-            if (uraianParts.length > 10) break;
-          }
-
-          uraian = uraianParts.join(' ').trim();
-
-          if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
-            transactions.push({ tanggal, kodeKegiatan, kodeRekening, noBukti, uraian, penerimaan, pengeluaran, saldo });
-            totalPenerimaan += penerimaan;
-            totalPengeluaran += pengeluaran;
-            lastSaldo = saldo;
-          }
-
-          i = j;
-          continue;
+      // Check if next part is kode rekening (5.x.x.x)
+      if (idx < parts.length && kodeRekeningRe.test(parts[idx])) {
+        kodeRekening = parts[idx];
+        idx++;
+        // Handle split kode rekening (e.g., "5.1.02.02.01.00" + "26")
+        if (idx < parts.length && /^\d{2,4}$/.test(parts[idx]) && kodeRekening.endsWith('0')) {
+          kodeRekening = kodeRekening + parts[idx];
+          idx++;
         }
       }
 
-      // Check if current token is a date (start of a row WITHOUT kode kegiatan)
-      if (dateRe.test(token)) {
-        const tanggal = token;
-        let uraian = '';
-        let penerimaan = 0;
-        let pengeluaran = 0;
-        let saldo = 0;
-        let j = i + 1;
-
-        // Check if next token is kode rekening or noBukti (some rows have kode rekening before uraian)
-        let kodeKegiatan = '';
-        let kodeRekening = '';
-        let noBukti = '';
-
-        if (j < allTokens.length && kodeRekeningRe.test(allTokens[j].trim())) {
-          kodeRekening = allTokens[j].trim();
-          j++;
-        }
-        if (j < allTokens.length && noBuktiRe.test(allTokens[j].trim())) {
-          noBukti = allTokens[j].trim();
-          j++;
-        }
-
-        // Uraian: collect tokens until we hit amounts
-        const uraianParts: string[] = [];
-        while (j < allTokens.length) {
-          const t = allTokens[j].trim();
-          if (amountRe.test(t) && t.replace(/[\s.]/g, '').length > 0) {
-            const num = parseAmount(t);
-            if (num > 0 || t.trim() === '0') {
-              penerimaan = num;
-              j++;
-              if (j < allTokens.length) { pengeluaran = parseAmount(allTokens[j].trim()); j++; }
-              if (j < allTokens.length) { saldo = parseAmount(allTokens[j].trim()); j++; }
-              // Skip optional line number
-              if (j < allTokens.length && lineNumberRe.test(allTokens[j].trim())) {
-                const possibleNum = parseInt(allTokens[j].trim());
-                if (possibleNum > 0 && possibleNum <= 50) j++;
-              }
-              break;
-            }
-          }
-          uraianParts.push(t);
-          j++;
-          if (uraianParts.length > 10) break;
-        }
-
-        uraian = uraianParts.join(' ').trim();
-
-        if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
-          transactions.push({ tanggal, kodeKegiatan, kodeRekening, noBukti, uraian, penerimaan, pengeluaran, saldo });
-          totalPenerimaan += penerimaan;
-          totalPengeluaran += pengeluaran;
-          lastSaldo = saldo;
-        }
-
-        i = j;
-        continue;
+      // Check if next part is no bukti (BPU/BNU/BBU + number)
+      if (idx < parts.length && noBuktiRe.test(parts[idx])) {
+        noBukti = parts[idx];
+        idx++;
       }
 
-      i++;
+      // Uraian: next non-numeric part
+      if (idx < parts.length && !/^[\d.\s]+$/.test(parts[idx])) {
+        uraian = parts[idx];
+        idx++;
+      }
+
+      // Remaining parts should be amounts (penerimaan, pengeluaran, saldo)
+      const amountParts = parts.slice(idx).filter(p => p.trim());
+      if (amountParts.length >= 3) {
+        penerimaan = parseAmount(amountParts[0]);
+        pengeluaran = parseAmount(amountParts[1]);
+        saldo = parseAmount(amountParts[2]);
+      } else if (amountParts.length === 2) {
+        pengeluaran = parseAmount(amountParts[0]);
+        saldo = parseAmount(amountParts[1]);
+      } else if (amountParts.length === 1) {
+        saldo = parseAmount(amountParts[0]);
+      }
+
+      if (penerimaan > 0 || pengeluaran > 0 || saldo > 0 || uraian) {
+        transactions.push({ tanggal, kodeKegiatan, kodeRekening, noBukti, uraian, penerimaan, pengeluaran, saldo });
+        totalPenerimaan += penerimaan;
+        totalPengeluaran += pengeluaran;
+        lastSaldo = saldo;
+      }
     }
   } else {
     // pdfplumber format: each row is a separate line, columns separated by spaces/tabs

@@ -289,7 +289,8 @@ async function extractTextWithPdf2Json(buffer: Buffer): Promise<{
   info: Record<string, unknown>;
   perPageText: { page: number; text: string }[];
 }> {
-  const PDFParser = (await import('pdf2json')).default;
+  const pdf2jsonModule = await import('pdf2json');
+  const PDFParser = (pdf2jsonModule as any).default || pdf2jsonModule;
 
   const pdfParser = new (PDFParser as any)(null, 1);
 
@@ -335,20 +336,22 @@ async function extractTextWithPdf2Json(buffer: Buffer): Promise<{
  * Process a single page from pdf2json's output into tab-separated text.
  * Groups text items by Y position (same line), then sorts by X position
  * and inserts tabs when there's a significant horizontal gap.
+ *
+ * Key insight: pdf2json's `w` (width) values are inflated (representing cell
+ * width, not text width), causing gap-based tab insertion to produce negative
+ * gaps. The fix is to use x-position gap only (ignoring the `w` value) with
+ * strict Y grouping.
  */
 function extractPageTextFromPdf2Json(page: any): string {
   if (!page?.Texts || !Array.isArray(page.Texts)) return '';
 
-  // pdf2json text items: { x, y, w, R: [{ T: "base64text", S: styleIdx }] }
-  // The T values are URI-encoded (not base64 despite the name in some docs)
-  const items: { str: string; x: number; y: number; w: number }[] = [];
+  const items: { str: string; x: number; y: number }[] = [];
 
   for (const text of page.Texts) {
     if (!text.R || !Array.isArray(text.R)) continue;
     let combinedStr = '';
     for (const run of text.R) {
       if (run.T !== undefined && run.T !== null) {
-        // pdf2json encodes text with encodeURIComponent
         try {
           combinedStr += decodeURIComponent(run.T);
         } catch {
@@ -361,15 +364,15 @@ function extractPageTextFromPdf2Json(page: any): string {
         str: combinedStr,
         x: text.x || 0,
         y: text.y || 0,
-        w: text.w || 0,
       });
     }
   }
 
   if (items.length === 0) return '';
 
-  // Group items into lines by Y position (within tolerance)
-  const LINE_TOLERANCE = 1.5; // pdf2json uses smaller units than pdfjs-dist
+  // Strict Y grouping - pdf2json Y coordinates are in small units
+  // Using 0.5 tolerance prevents merging adjacent table rows
+  const LINE_TOLERANCE = 0.5;
   const lines: { y: number; items: typeof items }[] = [];
 
   for (const item of items) {
@@ -386,11 +389,11 @@ function extractPageTextFromPdf2Json(page: any): string {
     }
   }
 
-  // Sort lines by Y position (ascending — pdf2json Y is top-down)
   lines.sort((a, b) => a.y - b.y);
 
-  // For each line, sort items by X position and join with tabs
-  const MIN_GAP_FOR_TAB = 3; // smaller gap threshold for pdf2json coordinates
+  // Use x-position gap only (ignore pdf2json's 'w' value which is inflated)
+  // When gap between consecutive items' x positions > threshold, insert tab
+  const MIN_X_GAP_FOR_TAB = 1.0;
   const pageLines: string[] = [];
 
   for (const line of lines) {
@@ -398,18 +401,17 @@ function extractPageTextFromPdf2Json(page: any): string {
 
     let lineText = '';
     let lastX = -Infinity;
-    let lastWidth = 0;
 
     for (const item of line.items) {
-      const gap = item.x - (lastX + lastWidth);
-      if (lastX > -Infinity && gap > MIN_GAP_FOR_TAB) {
+      const xGap = item.x - lastX;
+      if (lastX > -Infinity && xGap > MIN_X_GAP_FOR_TAB) {
         lineText += '\t';
-      } else if (lastX > -Infinity && gap > 0) {
+      } else if (lastX > -Infinity && xGap > 0) {
         lineText += ' ';
       }
+      // If xGap <= 0, items overlap - just concatenate (no separator)
       lineText += item.str;
       lastX = item.x;
-      lastWidth = item.w;
     }
 
     pageLines.push(lineText);

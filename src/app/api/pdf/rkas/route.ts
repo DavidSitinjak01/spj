@@ -153,7 +153,11 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
     if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
 
     const sekolahMatch = reMatch(/Nama Sekolah\s*:\s*(.+)/i, line);
-    if (sekolahMatch && sekolahMatch[1].trim()) headerInfo.namaSekolah = sekolahMatch[1].trim();
+    if (sekolahMatch && sekolahMatch[1].trim()) {
+      let val = sekolahMatch[1].trim();
+      val = val.replace(/\s*Halaman\s+\d+\s+dari\s+\d+.*$/i, '').trim();
+      headerInfo.namaSekolah = val;
+    }
 
     const alamatMatch = reMatch(/Alamat\s*:\s*(.+)/i, line);
     if (alamatMatch && alamatMatch[1].trim()) headerInfo.alamat = alamatMatch[1].trim();

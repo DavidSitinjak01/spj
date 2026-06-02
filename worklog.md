@@ -40,3 +40,37 @@ Work Log:
 Stage Summary:
 - Both BKU and BKU Pajak parsers now handle pdf2json format correctly
 - Vercel auto-deploy triggered
+
+---
+Task ID: 3
+Agent: main
+Task: Fix pdf2json extraction quality and update BKU/BKU Pajak parsers for proper tab-separated format
+
+Work Log:
+- Diagnosed root cause: pdf2json's `w` (width) values are inflated (represent cell width, not text width), causing gap-based tab insertion to produce negative gaps and concatenate columns
+- Key fix: Use x-position gap only (ignore `w` value) with strict Y grouping (LINE_TOLERANCE=0.5, down from 1.5)
+- Updated extractPageTextFromPdf2Json in pdf-processor.ts:
+  - Removed `w` from item tracking (was `{ str, x, y, w }`, now `{ str, x, y }`)
+  - Changed gap calculation from `item.x - (lastX + lastWidth)` to `item.x - lastX` (x-gap only)
+  - Reduced LINE_TOLERANCE from 1.5 to 0.5 (prevents merging adjacent table rows)
+  - Reduced MIN_X_GAP_FOR_TAB from 3 to 1.0 (MIN_X_GAP_FOR_TAB → MIN_X_GAP_FOR_TAB)
+  - Added handling for overlapping items (xGap <= 0: just concatenate, no separator)
+- Fixed pdf2json import to handle both CJS and ESM exports: `(pdf2jsonModule as any).default || pdf2jsonModule`
+- Updated parseBKUFromText in bku/route.ts:
+  - Changed isPdf2Json detection from `>20 tabs per line` to `>=5 tabs with date pattern at start`
+  - Replaced flat token array scanning with per-line tab-separated column parsing
+  - Added proper kode kegiatan, kode rekening, split kode rekening, no bukti detection
+  - Handles both patterns: with kode kegiatan and without (Saldo Bank, Tarik Tunai rows)
+- Updated parseBKUPajakFromText in bku-pajak/route.ts:
+  - Same detection change from `>20 tabs` to date-pattern-based
+  - Per-line parsing instead of flat token scanning
+  - Handles variable number of amount columns (7 or more with possible extra column)
+  - Proper Jumlah/total row parsing with numeric-only filtering
+- Lint check passes with no errors
+- Dev server running successfully
+
+Stage Summary:
+- pdf2json now produces proper tab-separated text with each table row on its own line
+- BKU and BKU Pajak parsers correctly parse the new format
+- The x-gap-only approach avoids the inflated `w` value issue that was concatenating columns
+- Ready for Vercel deployment
