@@ -208,15 +208,18 @@ export async function getBlobUrl(fileName: string): Promise<string | null> {
   return info?.url || null;
 }
 
-// --- PDF text extraction using pdfjs-dist directly ---
-// Works in both Node.js local and Vercel serverless environments.
-// Uses pdfjs-dist/legacy for Node.js compatibility with position-aware
-// text extraction that preserves tab separation for table parsing.
+// ============================================================================
+// PDF TEXT EXTRACTION
+// ============================================================================
+// Strategy for Vercel serverless:
+//   1. pdf2json (worker-free, pure JS — most reliable on Vercel)
+//   2. pdfjs-dist with position-aware extraction (needs serverExternalPackages)
+//   3. pdfjs-dist simple extraction (last resort)
+// ============================================================================
 
 /**
- * Extract text from a PDF buffer using pdfjs-dist directly.
- * Falls back to pdf-parse if pdfjs-dist fails.
- * Uses position-aware text extraction to preserve table structure with tab separation.
+ * Extract text from a PDF buffer.
+ * Tries multiple methods with fallbacks for maximum reliability on Vercel.
  */
 async function extractTextFromPDF(buffer: Buffer): Promise<{
   text: string;
@@ -226,33 +229,33 @@ async function extractTextFromPDF(buffer: Buffer): Promise<{
 }> {
   const errors: string[] = [];
 
-  // Try pdfjs-dist direct approach first (most reliable on Vercel)
+  // Method 1: pdf2json — Worker-free, pure JS. Most reliable on Vercel.
+  try {
+    const result = await extractTextWithPdf2Json(buffer);
+    if (result.text.trim() || result.numpages === 0) {
+      console.log('pdf2json extraction succeeded');
+      return result;
+    }
+    errors.push(`pdf2json: extracted empty text from ${result.numpages} pages`);
+  } catch (err: any) {
+    errors.push(`pdf2json: ${err?.message || String(err)}`);
+    console.warn('pdf2json extraction failed:', err?.message || err);
+  }
+
+  // Method 2: pdfjs-dist with position-aware extraction
   try {
     const result = await extractTextWithPdfjsDist(buffer);
-    // Validate: if text is empty but pages > 0, something went wrong
     if (result.text.trim() || result.numpages === 0) {
+      console.log('pdfjs-dist extraction succeeded');
       return result;
     }
-    // Text was empty - might be a scanned PDF, try fallback
     errors.push(`pdfjs-dist: extracted empty text from ${result.numpages} pages`);
-    console.warn('pdfjs-dist extracted empty text, trying pdf-parse fallback');
-  } catch (pdfjsErr: any) {
-    errors.push(`pdfjs-dist: ${pdfjsErr?.message || String(pdfjsErr)}`);
-    console.warn('pdfjs-dist extraction failed, trying pdf-parse fallback:', pdfjsErr?.message || pdfjsErr);
+  } catch (err: any) {
+    errors.push(`pdfjs-dist: ${err?.message || String(err)}`);
+    console.warn('pdfjs-dist extraction failed:', err?.message || err);
   }
 
-  // Fallback: try pdf-parse
-  try {
-    const result = await extractTextWithPdfParse(buffer);
-    if (result.text.trim() || result.numpages === 0) {
-      return result;
-    }
-    errors.push(`pdf-parse: extracted empty text from ${result.numpages} pages`);
-  } catch (pdfParseErr: any) {
-    errors.push(`pdf-parse: ${pdfParseErr?.message || String(pdfParseErr)}`);
-  }
-
-  // Fallback 3: try pdfjs-dist with simple (non-position-aware) extraction
+  // Method 3: pdfjs-dist simple (non-position-aware) extraction
   try {
     const result = await extractTextWithPdfjsSimple(buffer);
     if (result.text.trim()) {
@@ -260,12 +263,208 @@ async function extractTextFromPDF(buffer: Buffer): Promise<{
       return result;
     }
     errors.push('pdfjs-dist-simple: extracted empty text');
-  } catch (simpleErr: any) {
-    errors.push(`pdfjs-dist-simple: ${simpleErr?.message || String(simpleErr)}`);
+  } catch (err: any) {
+    errors.push(`pdfjs-dist-simple: ${err?.message || String(err)}`);
   }
 
   console.error('All PDF text extraction methods failed:', errors.join('; '));
   throw new Error(`PDF text extraction failed. Tried: ${errors.join('; ')}`);
+}
+
+// ============================================================================
+// Method 1: pdf2json (Worker-free)
+// ============================================================================
+
+/**
+ * Extract text using pdf2json — a pure JavaScript PDF parser that does NOT
+ * require web workers, DOMMatrix, or any browser APIs. This is the most
+ * reliable method for Vercel serverless environments.
+ *
+ * pdf2json returns text items with position info (x, y, w) which we use
+ * to produce tab-separated text that preserves table structure.
+ */
+async function extractTextWithPdf2Json(buffer: Buffer): Promise<{
+  text: string;
+  numpages: number;
+  info: Record<string, unknown>;
+  perPageText: { page: number; text: string }[];
+}> {
+  const PDFParser = (await import('pdf2json')).default;
+
+  const pdfParser = new (PDFParser as any)(null, 1);
+
+  return new Promise((resolve, reject) => {
+    pdfParser.on('pdfParser_dataError', (errData: any) => {
+      reject(new Error(errData?.parserError?.message || 'pdf2json parse error'));
+    });
+
+    pdfParser.on('pdfParser_dataReady', (pdfData: any) => {
+      try {
+        const perPageText: { page: number; text: string }[] = [];
+        let fullText = '';
+
+        if (!pdfData?.Pages || !Array.isArray(pdfData.Pages)) {
+          reject(new Error('pdf2json returned no pages'));
+          return;
+        }
+
+        for (let pageIdx = 0; pageIdx < pdfData.Pages.length; pageIdx++) {
+          const page = pdfData.Pages[pageIdx];
+          const pageText = extractPageTextFromPdf2Json(page);
+          perPageText.push({ page: pageIdx + 1, text: pageText });
+          fullText += pageText + '\n';
+        }
+
+        resolve({
+          text: fullText.trim(),
+          numpages: pdfData.Pages.length,
+          info: pdfData?.Meta || {},
+          perPageText,
+        });
+      } catch (err: any) {
+        reject(new Error(`pdf2json result processing failed: ${err?.message || String(err)}`));
+      }
+    });
+
+    // Parse from buffer
+    pdfParser.parseBuffer(buffer);
+  });
+}
+
+/**
+ * Process a single page from pdf2json's output into tab-separated text.
+ * Groups text items by Y position (same line), then sorts by X position
+ * and inserts tabs when there's a significant horizontal gap.
+ */
+function extractPageTextFromPdf2Json(page: any): string {
+  if (!page?.Texts || !Array.isArray(page.Texts)) return '';
+
+  // pdf2json text items: { x, y, w, R: [{ T: "base64text", S: styleIdx }] }
+  // The T values are URI-encoded (not base64 despite the name in some docs)
+  const items: { str: string; x: number; y: number; w: number }[] = [];
+
+  for (const text of page.Texts) {
+    if (!text.R || !Array.isArray(text.R)) continue;
+    let combinedStr = '';
+    for (const run of text.R) {
+      if (run.T !== undefined && run.T !== null) {
+        // pdf2json encodes text with encodeURIComponent
+        try {
+          combinedStr += decodeURIComponent(run.T);
+        } catch {
+          combinedStr += run.T;
+        }
+      }
+    }
+    if (combinedStr) {
+      items.push({
+        str: combinedStr,
+        x: text.x || 0,
+        y: text.y || 0,
+        w: text.w || 0,
+      });
+    }
+  }
+
+  if (items.length === 0) return '';
+
+  // Group items into lines by Y position (within tolerance)
+  const LINE_TOLERANCE = 1.5; // pdf2json uses smaller units than pdfjs-dist
+  const lines: { y: number; items: typeof items }[] = [];
+
+  for (const item of items) {
+    let foundLine = false;
+    for (const line of lines) {
+      if (Math.abs(line.y - item.y) <= LINE_TOLERANCE) {
+        line.items.push(item);
+        foundLine = true;
+        break;
+      }
+    }
+    if (!foundLine) {
+      lines.push({ y: item.y, items: [item] });
+    }
+  }
+
+  // Sort lines by Y position (ascending — pdf2json Y is top-down)
+  lines.sort((a, b) => a.y - b.y);
+
+  // For each line, sort items by X position and join with tabs
+  const MIN_GAP_FOR_TAB = 3; // smaller gap threshold for pdf2json coordinates
+  const pageLines: string[] = [];
+
+  for (const line of lines) {
+    line.items.sort((a, b) => a.x - b.x);
+
+    let lineText = '';
+    let lastX = -Infinity;
+    let lastWidth = 0;
+
+    for (const item of line.items) {
+      const gap = item.x - (lastX + lastWidth);
+      if (lastX > -Infinity && gap > MIN_GAP_FOR_TAB) {
+        lineText += '\t';
+      } else if (lastX > -Infinity && gap > 0) {
+        lineText += ' ';
+      }
+      lineText += item.str;
+      lastX = item.x;
+      lastWidth = item.w;
+    }
+
+    pageLines.push(lineText);
+  }
+
+  return pageLines.join('\n');
+}
+
+// ============================================================================
+// Method 2: pdfjs-dist with position-aware extraction
+// ============================================================================
+
+/**
+ * Configure pdfjs-dist worker for the current environment.
+ * - On Vercel serverless: With serverExternalPackages in next.config.ts,
+ *   pdfjs-dist is NOT bundled, so the fake worker's dynamic import
+ *   should resolve correctly from node_modules.
+ * - As a safety net, we also try require.resolve and path construction.
+ */
+async function configurePdfjsWorker(pdfjs: any): void {
+  // If workerSrc is already set, don't override
+  if (pdfjs.GlobalWorkerOptions.workerSrc) return;
+
+  // Try to find the worker module path
+  try {
+    const { createRequire } = await import('module');
+    const require = createRequire(import.meta.url);
+    const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
+    console.log('pdfjs worker path set via require.resolve:', workerPath);
+    return;
+  } catch (e: any) {
+    console.warn('require.resolve for pdfjs worker failed:', e?.message);
+  }
+
+  try {
+    const possiblePaths = [
+      path.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'),
+      path.join(process.cwd(), '.next/standalone/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'),
+    ];
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        pdfjs.GlobalWorkerOptions.workerSrc = p;
+        console.log('pdfjs worker path set via file search:', p);
+        return;
+      }
+    }
+  } catch (e: any) {
+    console.warn('File search for pdfjs worker failed:', e?.message);
+  }
+
+  // If we can't find the worker, leave workerSrc empty.
+  // With serverExternalPackages in next.config.ts, the fake worker's
+  // dynamic import should resolve correctly from node_modules.
+  console.log('pdfjs worker path not explicitly set — relying on fake worker auto-detection');
 }
 
 /**
@@ -283,38 +482,8 @@ async function extractTextWithPdfjsDist(buffer: Buffer): Promise<{
   applyDOMPolyfills();
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
-  // Set up the pdfjs-dist worker for Node.js environments.
-  // This is required for pdfjs-dist v6 to function. Without it, we get
-  // "No GlobalWorkerOptions.workerSrc specified" or
-  // "Cannot find module pdf.worker.mjs" errors.
-  // We try multiple approaches to find the worker file.
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    try {
-      // Approach 1: Use require.resolve to find the exact worker path
-      const { createRequire } = await import('module');
-      const require = createRequire(import.meta.url);
-      const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-      pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
-    } catch {
-      try {
-        // Approach 2: Construct the path relative to node_modules
-        const pathMod = await import('path');
-        const possiblePaths = [
-          pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'),
-          pathMod.join(process.cwd(), '.next/server/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'),
-        ];
-        const fsMod = await import('fs');
-        for (const p of possiblePaths) {
-          if (fsMod.existsSync(p)) {
-            pdfjs.GlobalWorkerOptions.workerSrc = p;
-            break;
-          }
-        }
-      } catch {
-        // Worker path not found - will be caught later if extraction fails
-      }
-    }
-  }
+  // Configure worker
+  await configurePdfjsWorker(pdfjs);
 
   const uint8 = new Uint8Array(buffer);
   const loadingTask = pdfjs.getDocument({
@@ -420,86 +589,9 @@ async function extractTextWithPdfjsDist(buffer: Buffer): Promise<{
   };
 }
 
-/**
- * Fallback: Extract text using pdf-parse (PDFParse class).
- * This is the fallback if pdfjs-dist direct approach fails.
- */
-async function extractTextWithPdfParse(buffer: Buffer): Promise<{
-  text: string;
-  numpages: number;
-  info: Record<string, unknown>;
-  perPageText: { page: number; text: string }[];
-}> {
-  // Ensure polyfills are applied before importing pdf-parse (which uses pdfjs-dist internally)
-  applyDOMPolyfills();
-  const pdfParseModule = await import('pdf-parse');
-  const PDFParse = pdfParseModule.PDFParse;
-  if (!PDFParse) {
-    throw new Error('PDFParse class not available in pdf-parse module');
-  }
-
-  // Set up pdfjs worker before pdf-parse uses it internally
-  // This prevents "Cannot find module pdf.worker.mjs" errors in bundled environments
-  try {
-    const pdfjsInner = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    if (!pdfjsInner.GlobalWorkerOptions.workerSrc) {
-      try {
-        const { createRequire } = await import('module');
-        const require = createRequire(import.meta.url);
-        const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-        pdfjsInner.GlobalWorkerOptions.workerSrc = workerPath;
-      } catch {
-        try {
-          const pathMod = await import('path');
-          const fsMod = await import('fs');
-          const p = pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
-          if (fsMod.existsSync(p)) {
-            pdfjsInner.GlobalWorkerOptions.workerSrc = p;
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-
-  // pdf-parse v2.4.5 PDFParse takes a single options object
-  const uint8 = new Uint8Array(buffer);
-  const parser = new PDFParse({ data: uint8, verbosity: 0 });
-  await parser.load();
-
-  // Get text from all pages
-  const result = await parser.getText({});
-
-  const perPageText: { page: number; text: string }[] = [];
-  let fullText = '';
-
-  if (result && result.pages) {
-    for (let i = 0; i < result.pages.length; i++) {
-      const pageText = result.pages[i].text || '';
-      perPageText.push({ page: i + 1, text: pageText });
-      fullText += pageText + '\n';
-    }
-  }
-
-  // Get document metadata
-  let info: Record<string, unknown> = {};
-  try {
-    const docInfo = await parser.getInfo();
-    if (docInfo) {
-      info = docInfo as Record<string, unknown>;
-    }
-  } catch {
-    // Metadata not available, continue
-  }
-
-  try { await parser.destroy(); } catch {}
-
-  return {
-    text: fullText.trim(),
-    numpages: perPageText.length,
-    info,
-    perPageText,
-  };
-}
+// ============================================================================
+// Method 3: pdfjs-dist simple extraction (no position-aware grouping)
+// ============================================================================
 
 /**
  * Fallback: Simple pdfjs-dist extraction without position-aware grouping.
@@ -514,7 +606,6 @@ async function extractTextWithPdfjsSimple(buffer: Buffer): Promise<{
 }> {
   // Ensure polyfills are applied before importing pdfjs-dist
   applyDOMPolyfills();
-  // Try different import paths for maximum compatibility
   let pdfjs: any;
   try {
     pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -526,29 +617,8 @@ async function extractTextWithPdfjsSimple(buffer: Buffer): Promise<{
     }
   }
 
-  // Set up worker (same approach as extractTextWithPdfjsDist)
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    try {
-      const { createRequire } = await import('module');
-      const require = createRequire(import.meta.url);
-      const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-      pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
-    } catch {
-      try {
-        const pathMod = await import('path');
-        const fsMod = await import('fs');
-        const possiblePaths = [
-          pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'),
-        ];
-        for (const p of possiblePaths) {
-          if (fsMod.existsSync(p)) {
-            pdfjs.GlobalWorkerOptions.workerSrc = p;
-            break;
-          }
-        }
-      } catch {}
-    }
-  }
+  // Configure worker (same as main method)
+  await configurePdfjsWorker(pdfjs);
 
   const uint8 = new Uint8Array(buffer);
   const loadingTask = pdfjs.getDocument({

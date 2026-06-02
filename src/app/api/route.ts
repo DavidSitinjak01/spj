@@ -16,7 +16,18 @@ export async function GET() {
     },
   };
 
-  // Test pdfjs-dist import (primary extraction method)
+  // Test pdf2json import (primary serverless method — worker-free)
+  try {
+    const pdf2json = await import("pdf2json");
+    diagnostics.pdf2json = {
+      loaded: true,
+      hasPDFParser: typeof pdf2json.default === "function",
+    };
+  } catch (e: any) {
+    diagnostics.pdf2json = { loaded: false, error: e.message };
+  }
+
+  // Test pdfjs-dist import (secondary method)
   try {
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     diagnostics.pdfjsDist = {
@@ -28,32 +39,20 @@ export async function GET() {
     diagnostics.pdfjsDist = { loaded: false, error: e.message };
   }
 
-  // Test pdf-parse import (fallback extraction method)
-  try {
-    const pdfParseModule = await import("pdf-parse");
-    diagnostics.pdfParse = {
-      loaded: true,
-      hasPDFParse: typeof pdfParseModule.PDFParse === "function",
-    };
-  } catch (e: any) {
-    diagnostics.pdfParse = { loaded: false, error: e.message };
-  }
-
   // Test full text extraction from a blob file
   try {
+    const { processPDFBuffer } = await import("@/lib/pdf-processor");
     const { list, get } = await import("@vercel/blob");
     const { blobs } = await list({ prefix: "pdfs/", limit: 1 });
 
     if (blobs.length > 0) {
       diagnostics.testBlob = blobs[0].pathname;
 
-      // Try to download the blob using get() v2 API (returns stream)
       try {
         const result = await get(blobs[0].pathname, { access: "private" });
         if (!result || result.statusCode !== 200 || !result.stream) {
           diagnostics.blobDownloadError = `get() returned unexpected result: statusCode=${result?.statusCode}, hasStream=${!!result?.stream}`;
         } else {
-          // Convert stream to buffer
           const chunks: Uint8Array[] = [];
           const reader = result.stream.getReader();
           try {
@@ -68,77 +67,16 @@ export async function GET() {
           const buffer = Buffer.concat(chunks);
           diagnostics.blobDownloadSize = buffer.length;
 
-          // Try pdfjs-dist extraction (primary method)
+          // Use the centralized extraction function (tries pdf2json → pdfjs-dist → simple)
           try {
-            const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-            // Set up worker for Node.js environments
-            if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-              try {
-                const { createRequire } = await import('module');
-                const require = createRequire(import.meta.url);
-                const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-                pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
-              } catch {
-                try {
-                  const pathMod = await import('path');
-                  const fsMod = await import('fs');
-                  const p = pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
-                  if (fsMod.existsSync(p)) {
-                    pdfjs.GlobalWorkerOptions.workerSrc = p;
-                  }
-                } catch {}
-              }
-            }
-
-            const uint8 = new Uint8Array(buffer);
-            const loadingTask = pdfjs.getDocument({ data: uint8, verbosity: 0, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true });
-            const doc = await loadingTask.promise;
-            diagnostics.pdfjsPageCount = doc.numPages;
-
-            // Extract text from first page
-            const page = await doc.getPage(1);
-            const textContent = await page.getTextContent();
-            const pageText = textContent.items.map((item: any) => item.str).join(' ');
-            diagnostics.pdfjsTextPreview = pageText.substring(0, 200);
-            diagnostics.pdfjsTextLength = pageText.length;
-            diagnostics.pdfjsExtractionSuccess = true;
-
-            page.cleanup();
-            try { doc.destroy(); } catch {}
-          } catch (pdfjsErr: any) {
-            diagnostics.pdfjsExtractionError = pdfjsErr.message;
-            diagnostics.pdfjsExtractionStack = pdfjsErr.stack?.substring(0, 300);
-
-            // Fallback: try pdf-parse
-            try {
-              const pdfParseModule = await import("pdf-parse");
-              // Set up pdfjs worker before pdf-parse uses it
-              try {
-                const pdfjsInner = await import("pdfjs-dist/legacy/build/pdf.mjs");
-                if (!pdfjsInner.GlobalWorkerOptions.workerSrc) {
-                  try {
-                    const { createRequire } = await import('module');
-                    const require = createRequire(import.meta.url);
-                    const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
-                    pdfjsInner.GlobalWorkerOptions.workerSrc = workerPath;
-                  } catch {}
-                }
-              } catch {}
-              const PDFParse = pdfParseModule.PDFParse;
-              const uint8 = new Uint8Array(buffer);
-              const parser = new PDFParse({ data: uint8, verbosity: 0 });
-              await parser.load();
-              const textResult = await parser.getText({});
-              diagnostics.pdfParsePageCount = textResult.pages?.length || 0;
-              if (textResult.pages && textResult.pages.length > 0) {
-                diagnostics.pdfParseTextPreview = textResult.pages[0].text?.substring(0, 200) || "(empty)";
-                diagnostics.pdfParseTextLength = textResult.pages[0].text?.length || 0;
-              }
-              diagnostics.pdfParseExtractionSuccess = true;
-              try { await parser.destroy(); } catch {}
-            } catch (pdfParseErr: any) {
-              diagnostics.pdfParseExtractionError = pdfParseErr.message;
-            }
+            const info = await processPDFBuffer(blobs[0].pathname.replace('pdfs/', ''), buffer);
+            diagnostics.extractionSuccess = true;
+            diagnostics.pageCount = info.pageCount;
+            const fullText = info.extractedText.map(p => p.text).join('\n');
+            diagnostics.textLength = fullText.length;
+            diagnostics.textPreview = fullText.substring(0, 200);
+          } catch (extractErr: any) {
+            diagnostics.extractionError = extractErr.message;
           }
         }
       } catch (dlErr: any) {
