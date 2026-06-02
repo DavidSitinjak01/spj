@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -373,6 +374,7 @@ function isBKUFile(fileName: string): boolean {
 
 // GET: List all BKU files and their parsed data
 export async function GET() {
+  applyDOMPolyfills();
   try {
     const monthOrder = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
 
@@ -461,6 +463,7 @@ export async function GET() {
 
 // POST: Import a new BKU file
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -531,6 +534,7 @@ export async function POST(request: Request) {
 
 // DELETE: Remove a BKU file and its cache
 export async function DELETE(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
     const { fileName } = body;

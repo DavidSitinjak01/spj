@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 import { parseBKUFromText } from '@/lib/pdf-text-parser';
 import fs from 'fs';
 import path from 'path';
@@ -112,6 +113,7 @@ async function loadBKUCacheServerless(): Promise<BKUCacheData[]> {
 // ─── GET: List all BPUs with items, toko, and auto nomor surat ──────────────────
 
 export async function GET() {
+  applyDOMPolyfills();
   try {
     const bpus = await db.bPU.findMany({
       include: {
@@ -144,6 +146,7 @@ export async function GET() {
 // ─── POST: Create a new BPU ────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
     const { noBukti, noPesanan, tglPesan, tokoId, bkuFileName, items } = body;
@@ -208,6 +211,7 @@ export async function POST(request: Request) {
 // ─── PUT: Update a BPU ─────────────────────────────────────────────────────────
 
 export async function PUT(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
     const { id, noPesanan, tglPesan, tokoId, bkuFileName, items } = body;
@@ -274,6 +278,7 @@ export async function PUT(request: Request) {
 // ─── DELETE: Delete a BPU and its items ─────────────────────────────────────────
 
 export async function DELETE(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
     const { id } = body;
@@ -301,6 +306,7 @@ export async function DELETE(request: Request) {
 // ─── PATCH: Sync BPU data from BKU cache files ─────────────────────────────────
 
 export async function PATCH() {
+  applyDOMPolyfills();
   try {
     // Load BKU data (dual-mode)
     const cacheDataList = isServerless()

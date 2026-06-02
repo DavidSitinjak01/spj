@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -1351,6 +1352,9 @@ export async function GET() {
 
 // POST: Import a new RKAS file
 export async function POST(request: Request) {
+  // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
+  applyDOMPolyfills();
+
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;

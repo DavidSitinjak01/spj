@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 import { parseBKUFromText, parseRKASFromText } from '@/lib/pdf-text-parser';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
@@ -470,6 +471,7 @@ function buildSPJTahunan(rkasTahunan: any, bkuMonths: any[]): SPJSummary['tahuna
 
 // --- API Handler ---
 export async function GET() {
+  applyDOMPolyfills();
   try {
     // Load BKU and RKAS data (dual-mode)
     const rkasMonths = isServerless() ? await loadRKASDataServerless() : loadRKASDataLocal();

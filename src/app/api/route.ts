@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { ensureDOMPolyfills } from "@/lib/pdf-processor";
+import { applyDOMPolyfills } from "@/lib/dom-polyfill";
 
 export async function GET() {
   // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
-  ensureDOMPolyfills();
+  applyDOMPolyfills();
 
   const diagnostics: Record<string, any> = {
     status: "ok",

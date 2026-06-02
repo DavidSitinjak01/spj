@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, deleteFromBlob, getBlobInfo } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -664,6 +665,7 @@ async function parseBKUPajakFile(fileName: string, buffer?: Buffer): Promise<BKU
 
 // GET: List all BKU Pajak files and their parsed data
 export async function GET() {
+  applyDOMPolyfills();
   try {
     if (isServerless()) {
       // Serverless: list from blob, process each with pdf-parse
@@ -761,6 +763,7 @@ export async function GET() {
 
 // POST: Import a new BKU Pajak file
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -832,6 +835,7 @@ export async function POST(request: Request) {
 
 // DELETE: Remove a BKU Pajak file and its cache
 export async function DELETE(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
     const { fileName } = body;

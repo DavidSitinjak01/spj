@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { processPDF } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const { fileName } = await request.json();
 

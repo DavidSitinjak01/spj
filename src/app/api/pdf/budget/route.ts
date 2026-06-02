@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { processPDF } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 import { isServerless } from '@/lib/serverless';
 import fs from 'fs';
 import path from 'path';
@@ -20,6 +21,7 @@ function getFileModTime(fileName: string): number {
 }
 
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const { fileName } = await request.json();
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });

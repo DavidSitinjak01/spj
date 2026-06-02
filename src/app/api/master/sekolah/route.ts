@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
+import { applyDOMPolyfills } from '@/lib/dom-polyfill';
 import { parseBKUPajakFromText } from '@/lib/pdf-text-parser';
 import fs from 'fs';
 import path from 'path';
@@ -195,6 +196,7 @@ async function readSchoolFromBKUCacheServerless(): Promise<{
 // If none exists, return a default empty record (no auto-creation)
 // Query param ?initFromBKU=true will merge BKU Pajak cached data into the default
 export async function GET(request: Request) {
+  applyDOMPolyfills();
   try {
     const { searchParams } = new URL(request.url);
     const initFromBKU = searchParams.get('initFromBKU') === 'true';
@@ -233,6 +235,7 @@ export async function GET(request: Request) {
 // POST: Create or update (upsert) the single DataSekolah record
 // Since there should only be one record, always upsert to the first record found
 export async function POST(request: Request) {
+  applyDOMPolyfills();
   try {
     const body = await request.json();
 
