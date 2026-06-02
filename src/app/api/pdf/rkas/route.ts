@@ -5,7 +5,10 @@ import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
 import { processPDF, processPDFBuffer, getPDFFiles, uploadToBlob, getBlobInfo, deleteFromBlob } from '@/lib/pdf-processor';
 import { applyDOMPolyfills } from '@/lib/dom-polyfill';
-import { db } from '@/lib/db';
+import type { RKASItem, RKASStandar, RKASPenerimaanItem, RKASMonth } from '@/lib/types';
+import { MONTH_ORDER, STANDAR_MAP } from '@/lib/types';
+import { parseRKASFromText } from '@/lib/services/pdf-parser';
+import { saveRKASToDB, getRKASFromDB, getAllRKASFromDB, deleteRKASFromDB } from '@/lib/services/db-service';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'upload');
 const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
@@ -13,63 +16,7 @@ if (!isServerless()) {
   try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch (err) { console.error('Failed to create cache dir:', err); }
 }
 
-// --- Interfaces ---
-interface RKASItem {
-  noUrut: string;
-  kodeRekening: string;
-  kodeProgram: string;
-  uraian: string;
-  volume: string;
-  satuan: string;
-  tarifHarga: number;
-  jumlah: number;
-}
-
-interface RKASStandar {
-  kode: string;
-  nama: string;
-  items: RKASItem[];
-  total: number;
-}
-
-interface RKASPenerimaanItem {
-  kode: string;
-  nama: string;
-  jumlah: number;
-}
-
-interface RKASMonth {
-  fileName: string;
-  judul: string;
-  bulan: string;
-  tahun: string;
-  tipe: 'bulanan' | 'tahunan';
-  sumberDana: string;
-  namaSekolah: string;
-  npsn: string;
-  alamat: string;
-  kabupaten: string;
-  provinsi: string;
-  totalPenerimaan: number;
-  totalBelanja: number;
-  penerimaan: RKASPenerimaanItem[];
-  standarList: RKASStandar[];
-  allItems: RKASItem[];
-}
-
-const MONTH_ORDER = ['JANUARI','FEBRUARI','MARET','APRIL','MEI','JUNI','JULI','AGUSTUS','SEPTEMBER','OKTOBER','NOVEMBER','DESEMBER'];
-
-const STANDAR_MAP: Record<string, string> = {
-  '02': 'Standar Isi',
-  '03': 'Standar Proses',
-  '04': 'Standar Tenaga Kependidikan',
-  '05': 'Standar Sarana dan Prasarana',
-  '06': 'Standar Pengelolaan',
-  '07': 'Standar Pembiayaan',
-  '08': 'Standar Penilaian Pendidikan',
-};
-
-// --- Helpers ---
+// --- Local helpers (for Python fallback) ---
 function getCacheKey(fileName: string): string {
   return path.join(CACHE_DIR, `${fileName.replace(/[^a-zA-Z0-9.-]/g, '_')}.rkas.json`);
 }
@@ -81,7 +28,9 @@ function getFileModTime(fileName: string): number {
 
 function parseAmount(s: string | null | undefined): number {
   if (!s) return 0;
-  return parseInt(s.replace(/\./g, '').replace(/,/g, '').replace(/\s/g, '').trim()) || 0;
+  const cleaned = s.replace(/\./g, '').replace(/,/g, '').replace(/\s/g, '').trim();
+  if (!cleaned || cleaned === '-') return 0;
+  return parseInt(cleaned) || 0;
 }
 
 function isRKASFile(fileName: string): boolean {
@@ -89,784 +38,11 @@ function isRKASFile(fileName: string): boolean {
   return lower.endsWith('.pdf') && !lower.includes('bku') && !lower.includes('pajak');
 }
 
-// Extract the top-level standar code from kodeProgram
 function extractStandarCode(kodeProgram: string): string {
   if (!kodeProgram) return '';
   const cleaned = kodeProgram.replace(/\s/g, '');
   const match = cleaned.match(/^(\d{2})\./);
   return match ? match[1] : '';
-}
-
-// --- DB Conversion Helpers ---
-function rkasMonthToDB(data: RKASMonth) {
-  return {
-    fileName: data.fileName,
-    judul: data.judul,
-    bulan: data.bulan,
-    tahun: data.tahun,
-    tipe: data.tipe,
-    sumberDana: data.sumberDana,
-    namaSekolah: data.namaSekolah,
-    npsn: data.npsn,
-    alamat: data.alamat,
-    kabupaten: data.kabupaten,
-    provinsi: data.provinsi,
-    totalPenerimaan: BigInt(data.totalPenerimaan),
-    totalBelanja: BigInt(data.totalBelanja),
-    penerimaan: data.penerimaan as any,
-    standarList: data.standarList as any,
-    allItems: data.allItems as any,
-  };
-}
-
-function dbToRKASMonth(record: any): RKASMonth {
-  return {
-    fileName: record.fileName,
-    judul: record.judul,
-    bulan: record.bulan,
-    tahun: record.tahun,
-    tipe: record.tipe as 'bulanan' | 'tahunan',
-    sumberDana: record.sumberDana,
-    namaSekolah: record.namaSekolah,
-    npsn: record.npsn,
-    alamat: record.alamat,
-    kabupaten: record.kabupaten,
-    provinsi: record.provinsi,
-    totalPenerimaan: Number(record.totalPenerimaan),
-    totalBelanja: Number(record.totalBelanja),
-    penerimaan: record.penerimaan as RKASPenerimaanItem[],
-    standarList: record.standarList as RKASStandar[],
-    allItems: record.allItems as RKASItem[],
-  };
-}
-
-// --- Serverless: Parse RKAS from extracted text using regex ---
-// Handles BOTH pdfplumber format (local) and pdf-parse format (Vercel serverless)
-// pdf-parse produces tab-separated columns in a different order than pdfplumber
-function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const hasTabs = text.includes('\t');
-
-  // --- Extract header info ---
-  const headerInfo: Record<string, string> = {};
-
-  // Extract judul from first meaningful lines
-  const judulParts: string[] = [];
-  for (const line of lines.slice(0, 15)) {
-    if (reSearch(/(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan|Sumber Dana)\s*:/i, line)) break;
-    if (reSearch(/Halaman.*dari/i, line)) continue;
-    if (reSearch(/Kertas Kerja.*NPSN/i, line)) continue;
-    if (reSearch(/^A\.\s*PENERIMAAN/i, line)) break;
-    if (reSearch(/^B\.\s*BELANJA/i, line)) break;
-    if (line === ':' || line.trim() === '') continue;
-    judulParts.push(line);
-  }
-  headerInfo.judul = judulParts.join(' ');
-
-  // Detect tipe from judul
-  const judulUpper = headerInfo.judul.toUpperCase();
-  if (judulUpper.includes('PERBULAN') || judulUpper.includes('BULANAN')) {
-    headerInfo.tipeFromJudul = 'bulanan';
-  } else if (judulUpper.includes('TAHUNAN') || (judulUpper.includes('RKAS') && !judulUpper.includes('PERBULAN'))) {
-    headerInfo.tipeFromJudul = 'tahunan';
-  }
-
-  // --- Header extraction ---
-  // pdf-parse format: field name, colon, and value may be on separate lines
-  // pdfplumber format: "Nama Sekolah : VALUE" on one line
-  // We handle both formats
-
-  // First pass: try single-line format (pdfplumber style)
-  for (const line of lines) {
-    if (line.includes('Halaman') && line.includes('dari')) continue;
-    if (line.includes('Kertas Kerja') && line.includes('NPSN')) continue;
-    if (line.includes('RKAS') && line.includes('NPSN')) continue;
-
-    const bulanMatch = reMatch(/Bulan\s*:\s*(\w+)/i, line);
-    if (bulanMatch) headerInfo.bulan = bulanMatch[1];
-
-    const tahunMatch = reMatch(/TAHUN ANGGARAN\s*:\s*(\d{4})/i, line);
-    if (tahunMatch) headerInfo.tahun = tahunMatch[1];
-
-    const bulanTahun = reMatch(/Bulan\s*:\s*(\w+)\s+(\d{4})/i, line);
-    if (bulanTahun) {
-      headerInfo.bulan = bulanTahun[1];
-      headerInfo.tahun = bulanTahun[2];
-    }
-
-    const npsnMatch = reMatch(/NPSN\s*:\s*(\d+)/i, line);
-    if (npsnMatch && !headerInfo.npsn) headerInfo.npsn = npsnMatch[1];
-
-    const sekolahMatch = reMatch(/Nama Sekolah\s*:\s*(.+)/i, line);
-    if (sekolahMatch && sekolahMatch[1].trim()) {
-      let val = sekolahMatch[1].trim();
-      val = val.replace(/\s*Halaman\s+\d+\s+dari\s+\d+.*$/i, '').trim();
-      headerInfo.namaSekolah = val;
-    }
-
-    const alamatMatch = reMatch(/Alamat\s*:\s*(.+)/i, line);
-    if (alamatMatch && alamatMatch[1].trim()) headerInfo.alamat = alamatMatch[1].trim();
-
-    const kabMatch = reMatch(/Kabupaten\s*:\s*(.+)/i, line);
-    if (kabMatch && kabMatch[1].trim()) headerInfo.kabupaten = kabMatch[1].trim();
-
-    const provMatch = reMatch(/Provinsi\s*:\s*(.+)/i, line);
-    if (provMatch && provMatch[1].trim()) headerInfo.provinsi = provMatch[1].trim();
-
-    if (line.includes('Sumber Dana') && !line.includes('dan Alokasi')) {
-      const sdMatch = reMatch(/Sumber Dana\s*:?\s*(.+)/i, line);
-      if (sdMatch) {
-        const val = sdMatch[1].trim();
-        if (val && val !== ':' && !val.includes('No.') && !val.includes('Kode') && !val.includes('Penerimaan')) {
-          headerInfo.sumberDana = val;
-        }
-      }
-    }
-  }
-
-  // Second pass: handle multi-line format (pdf-parse style)
-   // In pdf-parse, ALL field names come first, then ALL colons, then ALL values
-  // Pattern: "Nama Sekolah" \n "Alamat" \n ... \n ":" \n ":" \n ... \n "SMA NEGERI..." \n "JL...." \n ...
-  // Values are in the same order as field names
-  if (!headerInfo.namaSekolah || !headerInfo.alamat || !headerInfo.kabupaten || !headerInfo.provinsi) {
-    // Find all field name positions in order
-    const fieldOrder: { name: string; lineIdx: number }[] = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (reSearch(/^Nama Sekolah\s*:?\s*$/i, line)) fieldOrder.push({ name: 'namaSekolah', lineIdx: i });
-      else if (reSearch(/^Alamat\s*:?\s*$/i, line)) fieldOrder.push({ name: 'alamat', lineIdx: i });
-      else if (reSearch(/^Kabupaten\s*:?\s*$/i, line)) fieldOrder.push({ name: 'kabupaten', lineIdx: i });
-      else if (reSearch(/^Provinsi\s*:?\s*$/i, line)) fieldOrder.push({ name: 'provinsi', lineIdx: i });
-      else if (reSearch(/^Bulan\s*:?\s*$/i, line)) fieldOrder.push({ name: 'bulan', lineIdx: i });
-    }
-
-    if (fieldOrder.length >= 2) {
-      // Find value lines after the field names
-      // Two patterns:
-      // 1. Bulanan: field names → colon lines → value lines
-      // 2. Tahunan: "Nama Sekolah :" → value lines (colons on same line as field names)
-      const lastFieldIdx = fieldOrder[fieldOrder.length - 1].lineIdx;
-      
-      // Find colon-only lines after the last field name (bulanan pattern)
-      let colonEnd = -1;
-      for (let i = lastFieldIdx + 1; i < Math.min(lastFieldIdx + 10, lines.length); i++) {
-        if (lines[i].trim() === ':') {
-          colonEnd = i;
-        } else if (colonEnd !== -1 && lines[i].trim() !== ':') {
-          break;
-        }
-      }
-
-      // Value lines start after colons (or right after last field if no colon block)
-      const valueStartIdx = colonEnd !== -1 ? colonEnd + 1 : lastFieldIdx + 1;
-      const values: string[] = [];
-      for (let i = valueStartIdx; i < Math.min(valueStartIdx + fieldOrder.length + 5, lines.length); i++) {
-        const candidate = lines[i].trim();
-        if (candidate === ':' || candidate === '') continue;
-        // Stop if we hit another known section
-        if (reSearch(/^(NPSN|A\.|B\.)/i, candidate)) break;
-        values.push(candidate);
-      }
-
-      // Map values to fields by order
-      for (let fi = 0; fi < fieldOrder.length && fi < values.length; fi++) {
-        const fieldName = fieldOrder[fi].name;
-        const value = values[fi];
-        if (fieldName === 'namaSekolah' && !headerInfo.namaSekolah) headerInfo.namaSekolah = value;
-        if (fieldName === 'alamat' && !headerInfo.alamat) headerInfo.alamat = value;
-        if (fieldName === 'kabupaten' && !headerInfo.kabupaten) headerInfo.kabupaten = value;
-        if (fieldName === 'provinsi' && !headerInfo.provinsi) headerInfo.provinsi = value;
-        if (fieldName === 'bulan' && !headerInfo.bulan) {
-          const bulanMatch = reMatch(/^(\w+)\s+\d{4}$/i, value);
-          if (bulanMatch) headerInfo.bulan = bulanMatch[1];
-          else headerInfo.bulan = value;
-        }
-      }
-    }
-  }
-
-  // Try to extract Bulan from "Februari 2026" pattern on its own line
-  if (!headerInfo.bulan) {
-    const bulanNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-    for (const line of lines) {
-      for (const b of bulanNames) {
-        const m = reMatch(new RegExp(`(${b})\\s+(\\d{4})`, 'i'), line);
-        if (m) {
-          headerInfo.bulan = m[1];
-          if (!headerInfo.tahun) headerInfo.tahun = m[2];
-          break;
-        }
-      }
-      if (headerInfo.bulan) break;
-    }
-  }
-
-  // If tahun not found, try generic
-  if (!headerInfo.tahun) {
-    const tahunM = reMatch(/:\s*(\d{4})/, text);
-    if (tahunM) headerInfo.tahun = tahunM[1];
-  }
-
-  // Sumber Dana from tab-separated line (pdf-parse format)
-  if (!headerInfo.sumberDana) {
-    for (const line of lines) {
-      if (line.includes('\t') && line.includes('Sumber Dana')) {
-        const parts = line.split('\t');
-        // In pdf-parse, "BOSP Reguler \t Sumber Dana" means sumber dana is the first part
-        const sumberDanaPart = parts.find(p => p.trim() && !p.includes('Sumber Dana'));
-        if (sumberDanaPart) {
-          headerInfo.sumberDana = sumberDanaPart.trim();
-        }
-      }
-    }
-  }
-
-  // --- Extract Penerimaan (revenue) table from text ---
-  const penerimaan: RKASPenerimaanItem[] = [];
-  let totalPenerimaan = 0;
-  let inPenerimaan = false;
-
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
-    // Detect penerimaan section - "A. PENERIMAAN" or "PENERIMAAN" with "KODE" or "NO"
-    if (reSearch(/^A\.\s*PENERIMAAN/i, line) || (upperLine.includes('PENERIMAAN') && (upperLine.includes('KODE') || upperLine.includes('NO')))) {
-      inPenerimaan = true;
-      continue;
-    }
-    if (inPenerimaan) {
-      if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) {
-        const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
-        if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
-        inPenerimaan = false;
-        continue;
-      }
-      if (upperLine.startsWith('B.') && upperLine.includes('BELANJA')) {
-        inPenerimaan = false;
-        continue;
-      }
-      const match = reMatch(/^(\d+\.\d+(?:\.\d+)*)\.?\s+(.+?)\s+([\d.]+)$/, line);
-      if (match) {
-        penerimaan.push({
-          kode: match[1],
-          nama: match[2].trim(),
-          jumlah: parseAmount(match[3]),
-        });
-      }
-    }
-  }
-
-  // Also check for "Total Penerimaan" anywhere (pdf-parse puts it after "B. BELANJA")
-  if (totalPenerimaan === 0) {
-    for (const line of lines) {
-      if (line.toUpperCase().includes('TOTAL') && line.toUpperCase().includes('PENERIMAAN')) {
-        const totalMatch = reMatch(/([\d.]+)/, line.replace(/TOTAL\s*PENERIMAAN/i, ''));
-        if (totalMatch) totalPenerimaan = parseAmount(totalMatch[1]);
-      }
-    }
-  }
-
-  if (totalPenerimaan === 0 && penerimaan.length > 0) {
-    totalPenerimaan = penerimaan.reduce((s, p) => s + p.jumlah, 0);
-  }
-
-  // --- Extract Belanja (expenditure) table from text ---
-  const belanjaRaw: {
-    noUrut: string; kodeRekening: string; kodeProgram: string; uraian: string;
-    volume: string; satuan: string; tarifHarga: string; jumlah: string;
-  }[] = [];
-
-  let inBelanja = false;
-
-  if (hasTabs) {
-    // --- pdf-parse tab-separated format ---
-    // Tab structure for bulanan:
-    //   [kodeProgSuffix.] \t [noUrut. uraian jumlah] \t [volume satuan tarif] \t [kodeProg1.] \t [kodeProg2.] \t [kodeRekening]
-    // Tab structure for tahunan:
-    //   [noUrut kodeProgram] \t [kodeRekening uraian budgetNumbers...] \t [more budget numbers]
-    
-    let isTahunanTable = false;
-    let belanjaHeaderLines = 0; // Count header lines to detect table type
-    
-    for (const line of lines) {
-      const upperLine = line.toUpperCase();
-      
-      // Detect belanja section start
-      // Match "B. BELANJA", "BELANJA" with "NO" or "URUT", or "KODE REKENING" with "URAIAN"
-      if (reSearch(/^B\.\s*BELANJA/i, line) ||
-          (upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
-          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
-        inBelanja = true;
-        belanjaHeaderLines = 0;
-        // Detect tahunan vs bulanan from header
-        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI') || upperLine.includes('OPERASI')) {
-          isTahunanTable = true;
-        }
-        continue;
-      }
-      if (!inBelanja) continue;
-
-      // Count header lines and detect tahunan table type
-      belanjaHeaderLines++;
-      if (belanjaHeaderLines <= 20) {
-        if (upperLine.includes('SUMBER DANA') || upperLine.includes('ALOKASI ANGGARAN') || 
-            (upperLine.includes('BOSP') && upperLine.includes('REGULER')) ||
-            upperLine.includes('SILPA')) {
-          isTahunanTable = true;
-        }
-      }
-
-      // Skip header/subheader rows
-      // Skip "Total Penerimaan" line (pdf-parse puts it after B. BELANJA)
-      if (upperLine.includes('TOTAL') && upperLine.includes('PENERIMAAN')) continue;
-      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
-      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
-      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
-      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
-      if (upperLine.includes('KODE') && upperLine.includes('REKENING')) continue;
-      if (upperLine.includes('KODE') && upperLine.includes('KEGIATAN')) continue;
-      if (upperLine.includes('BOSP') && (upperLine.includes('REGULER') || upperLine.includes('DAERAH'))) continue;
-      if (upperLine.includes('Halaman') && upperLine.includes('dari')) continue;
-      if (upperLine.includes('Kertas Kerja') || upperLine.includes('RKAS')) continue;
-      if (upperLine.includes('MODAL') && upperLine.includes('OPERASI')) continue;
-      if (upperLine.includes('SiLPA')) continue;
-      if (upperLine.includes('Jumlah') && line.split('\t').length <= 2) continue;
-
-      const tabs = line.split('\t');
-      
-      if (isTahunanTable) {
-        // Tahunan format - handles BOTH pdf-parse and pdfjs-dist extraction formats:
-        //
-        // pdf-parse format:
-        //   "1 02." \t "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0" \t "0 0 0 0 0 0"
-        //   "4 02.02.01." \t "5.1.02.01.01.0052 Belanja Makanan 7.698.000 7.698.000 0 0 0" \t "0 0 0 0 0 0"
-        //   "5 02.02.01." \t "5.1.02.01.01.0052 001. Snack Kotak-- 2.250.000 2.250.000 0 0 0" \t "0 0 0 0 0 0"
-        //
-        // pdfjs-dist format:
-        //   "1 02. Pengembangan Standar Isi 19.530.000  19.530.000  0 0 0 0 0 0 0" \t "0 0"
-        //   "4 5.1.02.01.01.0052 02.02.01." \t "Belanja Makanan dan Minuman Rapat 7.698.000  7.698.000  0 0 0 0 0 0 0" \t "0 0"
-        //   "5 5.1.02.01.01.0052 02.02.01." \t "001. Snack Kotak-- 2.250.000  2.250.000  0 0 0 0 0 0 0" \t "0 0"
-        
-        if (tabs.length < 1) continue;
-        
-        const firstPart = tabs[0].trim();
-        const secondPart = tabs[1]?.trim() || '';
-        
-        // Parse first part: noUrut + optional kodeRekening + kodeProgram
-        let noUrut = '';
-        let kodeProgram = '';
-        let kodeRekening = '';
-        
-        // Try pdf-parse format: "4 02.02.01." (noUrut + kodeProgram only)
-        let firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
-        if (firstMatch) {
-          noUrut = firstMatch[1];
-          kodeProgram = firstMatch[2];
-        } else {
-          // Try pdfjs-dist format: "4 5.1.02.01.01.0052 02.02.01." (noUrut + kodeRekening + kodeProgram)
-          const pdfjsMatch = reMatch(/^(\d+)\s+(5\.\d+\.[\d.]+)\s+([\d.]+\.?)$/, firstPart);
-          if (pdfjsMatch) {
-            noUrut = pdfjsMatch[1];
-            kodeRekening = pdfjsMatch[2];
-            kodeProgram = pdfjsMatch[3];
-          } else {
-            // Try without kodeRekening: "1 02." or "1 02. Pengembangan..." (all in one line)
-            // This happens with pdfjs-dist when kode program and uraian are close together
-            const simpleMatch = reMatch(/^(\d+)\s+([\d.]+\.?)\s+(.+)$/, firstPart);
-            if (simpleMatch) {
-              noUrut = simpleMatch[1];
-              kodeProgram = simpleMatch[2];
-              // The rest might contain uraian + jumlah if it's all on one line
-              // We'll handle this below
-            } else {
-              // One more try: "19 03. Standar Proses 76.004.000 ..."
-              const noKodeRekMatch = reMatch(/^(\d+)\s+([\d.]+\.\s+)/, firstPart);
-              if (noKodeRekMatch) {
-                noUrut = noKodeRekMatch[1];
-                kodeProgram = noKodeRekMatch[2].trim();
-              } else {
-                continue;
-              }
-            }
-          }
-        }
-        
-        // Determine the remaining text to parse for uraian + jumlah
-        let uraianSource = secondPart;
-        
-        // If firstPart contains more than just noUrut+kodeProgram (pdfjs-dist format),
-        // the extra text is the uraian + jumlah
-        // Only apply firstPartExtra when using simpleMatch (not pdfjsMatch),
-        // because when pdfjsMatch matched, the first part is exactly "noUrut kodeRekening kodeProgram"
-        // with no extra uraian content
-        if (!kodeRekening) {
-          const firstPartExtra = reMatch(/^\d+\s+(?:5\.\d+\.[\d.]+\s+)?[\d.]+\.?\s+(.+)$/, firstPart);
-          if (firstPartExtra) {
-            uraianSource = firstPartExtra[1] + (secondPart ? '\t' + secondPart : '');
-          }
-        }
-        
-        // Parse uraian + jumlah from the source text
-        let uraian = '';
-        let jumlah = '';
-        
-        // Check if uraianSource starts with kode rekening (5.x.x.x pattern)
-        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, uraianSource);
-        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1]) && !kodeRekening) {
-          kodeRekening = kodeRekMatch[1];
-          const rest = kodeRekMatch[2];
-          // Extract uraian and first jumlah from rest
-          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, rest);
-          if (uraianJumlahMatch) {
-            uraian = uraianJumlahMatch[1].trim();
-            jumlah = uraianJumlahMatch[2];
-          } else {
-            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, rest);
-            if (simpleUJ) {
-              uraian = simpleUJ[1].trim();
-              jumlah = simpleUJ[2];
-            }
-          }
-        } else {
-          // No kode rekening (or already extracted) - this is a category/sub row or uraian+jumlah directly
-          // Try simpleUJ first (extracts first number as jumlah), then uraianJumlahMatch as fallback
-          const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, uraianSource);
-          if (simpleUJ) {
-            uraian = simpleUJ[1].trim();
-            jumlah = simpleUJ[2];
-          } else {
-            const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, uraianSource);
-            if (uraianJumlahMatch) {
-              uraian = uraianJumlahMatch[1].trim();
-              jumlah = uraianJumlahMatch[2];
-            } else {
-              uraian = uraianSource;
-            }
-          }
-        }
-        
-        belanjaRaw.push({
-          noUrut,
-          kodeRekening,
-          kodeProgram,
-          uraian,
-          volume: '',
-          satuan: '',
-          tarifHarga: '',
-          jumlah,
-        });
-      } else {
-        // Bulanan format with tabs:
-        // Category: "1. Standar Proses 5.364.000 \t 03."
-        // Sub-category: "2. Pelaksanaan... 5.364.000 \t 03. \t 03."
-        // Sub-sub-cat: "08. \t 3. Program... 4.764.000 \t 03. \t 03."
-        // Detail+VST: "08. \t 4. Nasi Bungkus-- 3.150.000 \t 90 per bungkus 35.000 \t 03. \t 03. \t 5.1.02.01.01.0052"
-        // Detail only: "08. \t 3. Program... 4.764.000 \t 03. \t 03."
-        
-        // Skip lines that are clearly not data rows
-        if (!reSearch(/^\d/, line.replace(/^\s*/, ''))) continue;
-        if (upperLine.startsWith('HALAMAN')) continue;
-        
-        // Determine if first tab part is a kode program suffix (like "08.", "02.")
-        // or part of noUrut+uraian+jumlah
-        let kodeProgSuffix = '';
-        let mainDataPart = '';
-        let volumePart = '';
-        let kodeRekening = '';
-        let kodeProgParts: string[] = [];
-        
-        const firstPart = tabs[0].trim();
-        
-        // Check if first part is just a kode program suffix (like "08." or "02.")
-        if (reMatch(/^(\d{2})\.\s*$/, firstPart)) {
-          kodeProgSuffix = firstPart.trim();
-          mainDataPart = tabs[1]?.trim() || '';
-          // Remaining tabs: volume, kode prog parts, kode rekening
-          const remaining = tabs.slice(2);
-          
-          // Check if second remaining part looks like volume/satuan/tarif
-          // It contains things like "90 per bungkus 35.000" or "4 dus 66.000"
-          let volIdx = 0;
-          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
-            volumePart = remaining[0].trim();
-            volIdx = 1;
-          }
-          
-          // Parse remaining parts for kode program and kode rekening
-          const kodeParts = remaining.slice(volIdx);
-          for (const kp of kodeParts) {
-            const trimmed = kp.trim();
-            if (!trimmed) continue;
-            // Kode rekening pattern: starts with "5." and has multiple dots
-            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) {
-              kodeRekening = trimmed;
-            } else if (reMatch(/^\d{2}\.\s*$/, trimmed)) {
-              kodeProgParts.push(trimmed);
-            }
-          }
-        } else {
-          // First part contains noUrut + uraian + jumlah (no kode prog suffix)
-          mainDataPart = firstPart;
-          const remaining = tabs.slice(1);
-          
-          let volIdx = 0;
-          if (remaining.length > 0 && reSearch(/^\d[\d.]*\s+\w+/, remaining[0].trim())) {
-            volumePart = remaining[0].trim();
-            volIdx = 1;
-          }
-          
-          const kodeParts = remaining.slice(volIdx);
-          for (const kp of kodeParts) {
-            const trimmed = kp.trim();
-            if (!trimmed) continue;
-            if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) {
-              kodeRekening = trimmed;
-            } else if (reMatch(/^\d{2}\.\s*$/, trimmed)) {
-              kodeProgParts.push(trimmed);
-            }
-          }
-        }
-        
-        // Parse mainDataPart: "4. Nasi Bungkus-- 3.150.000" or "1. Standar Proses 5.364.000"
-        const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
-        if (!mainMatch) {
-          // Try with multi-line uraian (uraian might span to next line)
-          // Skip for now, handle in a second pass
-          continue;
-        }
-        
-        const noUrut = mainMatch[1];
-        const uraian = mainMatch[2].trim();
-        const jumlah = mainMatch[3];
-        
-        // Build kode program from parts + suffix
-        // kodeProgParts are the prefix parts (like ["03.", "03."])
-        // kodeProgSuffix is the suffix (like "08.")
-        const kodeProgram = [...kodeProgParts, kodeProgSuffix].join('').replace(/\s/g, '');
-        
-        // Parse volume part: "90 per bungkus 35.000" → volume=90, satuan="per bungkus", tarif=35000
-        let volume = '';
-        let satuan = '';
-        let tarifHarga = '';
-        if (volumePart) {
-          const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
-          if (volMatch) {
-            volume = volMatch[1];
-            satuan = volMatch[2].trim();
-            tarifHarga = volMatch[3];
-          } else {
-            // Maybe just volume + satuan without tarif
-            const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
-            if (volMatch2) {
-              volume = volMatch2[1];
-              satuan = volMatch2[2].trim();
-            }
-          }
-        }
-        
-        belanjaRaw.push({
-          noUrut,
-          kodeRekening,
-          kodeProgram,
-          uraian,
-          volume,
-          satuan,
-          tarifHarga,
-          jumlah,
-        });
-      }
-    }
-  } else {
-    // --- pdfplumber format (no tabs) ---
-    // Original regex-based parsing
-    for (const line of lines) {
-      const upperLine = line.toUpperCase();
-      if ((upperLine.includes('BELANJA') && (upperLine.includes('NO') || upperLine.includes('URUT'))) ||
-          (upperLine.includes('KODE REKENING') && upperLine.includes('URAIAN'))) {
-        inBelanja = true;
-        continue;
-      }
-      if (!inBelanja) continue;
-
-      if (upperLine.includes('VOLUME') && upperLine.includes('SATUAN')) continue;
-      if (upperLine.includes('BELANJA') && upperLine.includes('OPERASI')) continue;
-      if (upperLine.includes('SUMBER DANA') && upperLine.includes('ALOKASI')) continue;
-      if (upperLine.includes('NO') && upperLine.includes('URUT')) continue;
-
-      const fullMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]*)\s+(\w+)\s+(\d[\d.]*)\s+(\d[\d.]+)$/, line);
-      if (fullMatch) {
-        belanjaRaw.push({
-          noUrut: fullMatch[1],
-          kodeRekening: fullMatch[2],
-          kodeProgram: fullMatch[3],
-          uraian: fullMatch[4].trim(),
-          volume: fullMatch[5],
-          satuan: fullMatch[6],
-          tarifHarga: fullMatch[7],
-          jumlah: fullMatch[8],
-        });
-        continue;
-      }
-
-      const simpleMatch = reMatch(/^(\d+)\s+(\d+\.[\d.]+)\s+(\d{2}\.[\d.]+)\s+(.+?)\s+(\d[\d.]+)\s*$/, line);
-      if (simpleMatch) {
-        belanjaRaw.push({
-          noUrut: simpleMatch[1],
-          kodeRekening: simpleMatch[2],
-          kodeProgram: simpleMatch[3],
-          uraian: simpleMatch[4].trim(),
-          volume: '',
-          satuan: '',
-          tarifHarga: '',
-          jumlah: simpleMatch[5],
-        });
-        continue;
-      }
-    }
-  }
-
-  // Handle multi-line uraian for pdf-parse format
-  // Some items have uraian spanning multiple lines:
-  //   "08. \t 35. \n Pembelian Bahan Habis Pakai... \n administrasi sekolah) \n 11.906.000 \t 05. \t 06."
-  // We need to merge these continuation lines with the previous item
-  if (hasTabs) {
-    const merged: typeof belanjaRaw = [];
-    for (let i = 0; i < belanjaRaw.length; i++) {
-      const item = belanjaRaw[i];
-      // Check if this item has jumlah=0 and the next item has no noUrut pattern
-      // (continuation of uraian)
-      if (i > 0 && !item.kodeRekening && item.uraian && !reMatch(/^\d+/, item.noUrut)) {
-        // This might be a continuation - append uraian to previous
-        const prev = merged[merged.length - 1];
-        if (prev) {
-          prev.uraian += ' ' + item.uraian;
-          if (!prev.jumlah && item.jumlah) prev.jumlah = item.jumlah;
-          if (!prev.kodeRekening && item.kodeRekening) prev.kodeRekening = item.kodeRekening;
-          if (!prev.kodeProgram && item.kodeProgram) prev.kodeProgram = item.kodeProgram;
-          continue;
-        }
-      }
-      merged.push(item);
-    }
-    belanjaRaw.length = 0;
-    belanjaRaw.push(...merged);
-  }
-
-  // --- Build RKASMonth from parsed data ---
-  const rawItems: RKASItem[] = belanjaRaw
-    .filter(r => r.kodeRekening && r.kodeRekening.trim() !== '')
-    .map(r => ({
-      noUrut: r.noUrut,
-      kodeRekening: r.kodeRekening,
-      kodeProgram: r.kodeProgram,
-      uraian: r.uraian,
-      volume: r.volume,
-      satuan: r.satuan,
-      tarifHarga: parseAmount(r.tarifHarga),
-      jumlah: parseAmount(r.jumlah),
-    }));
-
-  // Filter out intermediate "rekening header" rows (subtotals)
-  const allItems: RKASItem[] = [];
-  for (let idx = 0; idx < rawItems.length; idx++) {
-    const item = rawItems[idx];
-    const next = idx + 1 < rawItems.length ? rawItems[idx + 1] : null;
-    const itemStartsWithNumber = /^\d{3}[.\s]/.test(item.uraian.trim());
-    const isIntermediate = !itemStartsWithNumber
-      && next
-      && item.kodeRekening === next.kodeRekening
-      && item.kodeProgram.replace(/\s/g, '') === next.kodeProgram.replace(/\s/g, '')
-      && /^\d{3}[.\s]/.test(next.uraian.trim());
-    if (!isIntermediate) {
-      allItems.push(item);
-    }
-  }
-
-  // Group items by standar category
-  const standarMap = new Map<string, RKASItem[]>();
-  for (const item of allItems) {
-    const standarCode = extractStandarCode(item.kodeProgram);
-    if (standarCode) {
-      if (!standarMap.has(standarCode)) {
-        standarMap.set(standarCode, []);
-      }
-      standarMap.get(standarCode)!.push(item);
-    }
-  }
-
-  // Build standarList in order
-  const standarList: RKASStandar[] = [];
-  const orderedCodes = ['02', '03', '04', '05', '06', '07', '08'];
-  for (const code of orderedCodes) {
-    const items = standarMap.get(code);
-    if (items && items.length > 0) {
-      standarList.push({
-        kode: code,
-        nama: STANDAR_MAP[code] || `Standar ${code}`,
-        items,
-        total: items.reduce((s, item) => s + item.jumlah, 0),
-      });
-    }
-  }
-
-  for (const [code, items] of standarMap) {
-    if (!orderedCodes.includes(code) && items.length > 0) {
-      standarList.push({
-        kode: code,
-        nama: STANDAR_MAP[code] || `Standar ${code}`,
-        items,
-        total: items.reduce((s, item) => s + item.jumlah, 0),
-      });
-    }
-  }
-
-  const totalBelanja = allItems.reduce((s, item) => s + item.jumlah, 0);
-
-  // Determine tipe
-  const bulanValue = (headerInfo.bulan || '').toUpperCase();
-  const tipeFromJudul = headerInfo.tipeFromJudul || '';
-  let tipe: 'bulanan' | 'tahunan';
-
-  if (tipeFromJudul === 'bulanan') {
-    tipe = 'bulanan';
-  } else if (tipeFromJudul === 'tahunan') {
-    tipe = 'tahunan';
-  } else {
-    tipe = bulanValue ? 'bulanan' : 'tahunan';
-  }
-
-  const judul = headerInfo.judul || (tipe === 'bulanan' ? 'Rincian Kertas Kerja Perbulan' : 'Kertas Kerja RKAS');
-
-  const result = {
-    fileName,
-    judul,
-    bulan: bulanValue,
-    tahun: headerInfo.tahun || '',
-    tipe,
-    sumberDana: headerInfo.sumberDana || '',
-    namaSekolah: headerInfo.namaSekolah || '',
-    npsn: headerInfo.npsn || '',
-    alamat: headerInfo.alamat || '',
-    kabupaten: headerInfo.kabupaten || '',
-    provinsi: headerInfo.provinsi || '',
-    totalPenerimaan,
-    totalBelanja,
-    penerimaan,
-    standarList,
-    allItems,
-  };
-
-  console.log(`[RKAS Parser] Parsed ${fileName}: ${allItems.length} items, tipe=${tipe}, bulan=${bulanValue}, tahun=${headerInfo.tahun}, penerimaan=${penerimaan.length}, standarList=${standarList.length}`);
-
-  return result;
-}
-
-// --- Regex helpers ---
-function reSearch(pattern: RegExp, text: string): boolean {
-  return pattern.test(text);
-}
-
-function reMatch(pattern: RegExp, text: string): RegExpMatchArray | null {
-  return text.match(pattern);
 }
 
 // --- Python PDF Parser (Local mode) ---
@@ -894,10 +70,8 @@ for i, page in enumerate(pdf.pages):
             stripped = line.strip()
             if not stripped:
                 continue
-            # Stop at header fields (NPSN, Tahun Anggaran, etc.)
             if re.search(r'(NPSN|TAHUN ANGGARAN|Nama Sekolah|Alamat|Kabupaten|Provinsi|Bulan)\\s*:', stripped):
                 break
-            # Skip footer lines
             if 'Halaman' in stripped and 'dari' in stripped:
                 continue
             if 'Kertas Kerja' in stripped and ('NPSN' in stripped or 'Halaman' in stripped):
@@ -915,46 +89,36 @@ for i, page in enumerate(pdf.pages):
             header_info['tipeFromJudul'] = ''
 
         for line in lines:
-            # Skip footer lines (contains "Halaman" and "Kertas Kerja")
             if 'Halaman' in line and 'dari' in line:
                 continue
             if 'Kertas Kerja' in line and 'NPSN' in line:
                 continue
 
-            # Bulan
             bulan_match = re.search(r'Bulan\\s*:\\s*(\\w+)', line)
             if bulan_match:
                 header_info['bulan'] = bulan_match.group(1)
-            # Tahun from "TAHUN ANGGARAN"
             tahun_match = re.search(r'TAHUN ANGGARAN\\s*:\\s*(\\d{4})', line)
             if tahun_match:
                 header_info['tahun'] = tahun_match.group(1)
-            # Also try "Bulan : Januari 2026" pattern
             bulan_tahun = re.search(r'Bulan\\s*:\\s*(\\w+)\\s+(\\d{4})', line)
             if bulan_tahun:
                 header_info['bulan'] = bulan_tahun.group(1)
                 header_info['tahun'] = bulan_tahun.group(2)
-            # NPSN
             npsn_match = re.search(r'NPSN\\s*:\\s*(\\d+)', line)
             if npsn_match and 'npsn' not in header_info:
                 header_info['npsn'] = npsn_match.group(1)
-            # Nama Sekolah
             sekolah_match = re.search(r'Nama Sekolah\\s*:\\s*(.+)', line)
             if sekolah_match:
                 header_info['namaSekolah'] = sekolah_match.group(1).strip()
-            # Alamat
             alamat_match = re.search(r'Alamat\\s*:\\s*(.+)', line)
             if alamat_match:
                 header_info['alamat'] = alamat_match.group(1).strip()
-            # Kabupaten
             kab_match = re.search(r'Kabupaten\\s*:\\s*(.+)', line)
             if kab_match:
                 header_info['kabupaten'] = kab_match.group(1).strip()
-            # Provinsi
             prov_match = re.search(r'Provinsi\\s*:\\s*(.+)', line)
             if prov_match:
                 header_info['provinsi'] = prov_match.group(1).strip()
-            # Sumber Dana
             if 'Sumber Dana' in line and 'dan Alokasi' not in line:
                 sd_match = re.search(r'Sumber Dana\\s*:?\\s*(.+)', line)
                 if sd_match:
@@ -962,7 +126,6 @@ for i, page in enumerate(pdf.pages):
                     if val and val != ':' and 'No.' not in val and 'Kode' not in val and 'Penerimaan' not in val:
                         header_info['sumberDana'] = val
 
-        # If tahun not found in specific pattern, try generic
         if 'tahun' not in header_info:
             tahun_m = re.search(r':\\s*(\\d{4})', text)
             if tahun_m:
@@ -977,7 +140,6 @@ for i, page in enumerate(pdf.pages):
         first_row = [c or '' for c in table[0]]
         first_row_text = ' '.join(first_row).upper()
 
-        # Detect penerimaan table (3 cols: No. Kode, Penerimaan, Jumlah)
         if len(first_row) == 3 and ('PENERIMAAN' in first_row_text or 'KODE' in first_row_text):
             for row in table[1:]:
                 r = [c or '' for c in row]
@@ -990,11 +152,9 @@ for i, page in enumerate(pdf.pages):
                 elif 'TOTAL' in r[0].upper():
                     header_info['totalPenerimaan'] = r[2].strip().replace('.', '')
 
-        # Detect belanja table
         elif ('URUT' in first_row_text or 'NO' in first_row_text) and ('JUMLAH' in first_row_text):
             ncols = len(first_row)
 
-            # Determine if this is a bulanan or tahunan table from header
             all_header_text = ''
             for hr in table[:3]:
                 all_header_text += ' '.join([c or '' for c in hr]).upper() + ' '
@@ -1005,7 +165,6 @@ for i, page in enumerate(pdf.pages):
             for row in table[1:]:
                 r = [c or '' for c in row]
 
-                # Skip sub-header rows
                 row_text = ' '.join(r).upper()
                 if 'VOLUME' in row_text and 'SATUAN' in row_text:
                     continue
@@ -1022,7 +181,6 @@ for i, page in enumerate(pdf.pages):
                 if no_urut.upper() in ['NO', 'URUT']:
                     continue
 
-                # Parse based on detected table type
                 if is_tahunan_table and ncols >= 10:
                     kp = r[2].strip() if len(r) > 2 else ''
                     uraian_val = r[3].strip().replace('\\n', ' ') if len(r) > 3 else ''
@@ -1107,9 +265,7 @@ print(json.dumps(result, ensure_ascii=False))
 // If throwDetails is true, throws with diagnostic info instead of returning null.
 async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: boolean): Promise<RKASMonth | null> {
   if (isServerless()) {
-    // Serverless: parse with pdfjs-dist + regex
-    // If buffer is provided (e.g., right after upload), use it directly
-    // Otherwise, download from blob
+    // Serverless: use shared parseRKASFromText (handles pdfjs-dist extraction)
     let diagnosticInfo: Record<string, any> = { fileName, step: 'init' };
     try {
       let info;
@@ -1148,7 +304,6 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
         console.warn(`RKAS parse: parsed ${fileName} but got 0 belanja items. Header: school=${result.namaSekolah}, npsn=${result.npsn}, penerimaan=${result.totalPenerimaan}, tipe=${result.tipe}`);
         diagnosticInfo.warning = '0_items';
         diagnosticInfo.parsedHeader = { school: result.namaSekolah, npsn: result.npsn, tipe: result.tipe, totalPenerimaan: result.totalPenerimaan };
-        // Don't return null for 0 items - still return the header info
       } else {
         console.log(`RKAS parse: successfully parsed ${fileName} - ${result.allItems.length} items, tipe=${result.tipe}`);
       }
@@ -1167,7 +322,7 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
     }
   }
 
-  // Local: existing Python approach
+  // Local: Python pdfplumber approach with cache
   const filePath = path.join(UPLOAD_DIR, fileName);
   if (!fs.existsSync(filePath)) return null;
 
@@ -1286,7 +441,7 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
   // Calculate total belanja from leaf items
   const totalBelanja = allItems.reduce((s, item) => s + item.jumlah, 0);
 
-  // Determine tipe: use judul-based detection first, fallback to bulan field
+  // Determine tipe
   const bulanValue = (header.bulan || '').toUpperCase();
   const tipeFromJudul = (header.tipeFromJudul || '') as string;
   let tipe: 'bulanan' | 'tahunan';
@@ -1296,7 +451,6 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
   } else if (tipeFromJudul === 'tahunan') {
     tipe = 'tahunan';
   } else {
-    // Fallback: if bulan exists, it's bulanan; otherwise tahunan
     tipe = bulanValue ? 'bulanan' : 'tahunan';
   }
 
@@ -1336,13 +490,17 @@ export async function GET() {
   try {
     const files = (await getPDFFiles()).filter(f => isRKASFile(f)).sort();
 
+    // Try to get all records from DB first
+    const dbRecords = await getAllRKASFromDB();
+    const dbByFileName = new Map(dbRecords.map(r => [r.fileName, r]));
+
     const months: RKASMonth[] = [];
     for (const file of files) {
       try {
         // Check DB first to avoid re-parsing
-        const dbRecord = await db.rKASMonthDB.findFirst({ where: { fileName: file } });
+        const dbRecord = dbByFileName.get(file);
         if (dbRecord) {
-          months.push(dbToRKASMonth(dbRecord));
+          months.push(dbRecord);
           continue;
         }
         // No DB record - parse from PDF
@@ -1351,11 +509,7 @@ export async function GET() {
           months.push(data);
           // Save to DB for future requests
           try {
-            await db.rKASMonthDB.upsert({
-              where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
-              update: rkasMonthToDB(data),
-              create: rkasMonthToDB(data),
-            });
+            await saveRKASToDB(data);
           } catch (dbErr) {
             console.error(`Failed to save RKAS ${file} to DB:`, dbErr);
           }
@@ -1369,20 +523,13 @@ export async function GET() {
     months.sort((a, b) => {
       if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
       if (a.tipe !== b.tipe) return a.tipe === 'tahunan' ? 1 : -1;
-      const ma = MONTH_ORDER.indexOf(a.bulan);
-      const mb = MONTH_ORDER.indexOf(b.bulan);
+      const ma = MONTH_ORDER.indexOf(a.bulan as any);
+      const mb = MONTH_ORDER.indexOf(b.bulan as any);
       const ia = ma === -1 ? 99 : ma;
       const ib = mb === -1 ? 99 : mb;
       return ia - ib;
     });
 
-    if (isServerless()) {
-      const bulanan = months.filter(m => m.tipe === 'bulanan');
-      const tahunan = months.filter(m => m.tipe === 'tahunan');
-      return NextResponse.json({ months, bulanan, tahunan, files });
-    }
-
-    // Separate into bulanan and tahunan
     const bulanan = months.filter(m => m.tipe === 'bulanan');
     const tahunan = months.filter(m => m.tipe === 'tahunan');
 
@@ -1437,18 +584,16 @@ export async function POST(request: Request) {
         hint: 'PDF text extraction may have failed. The diagnostic info above shows which step failed.',
       }, { status: 500 });
 
-      // Save parsed data to DB (upsert by composite key bulan+tahun+tipe)
+      // Save parsed data to DB using shared service (returns { replaced })
+      let replaced = false;
       try {
-        await db.rKASMonthDB.upsert({
-          where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
-          update: rkasMonthToDB(data),
-          create: rkasMonthToDB(data),
-        });
+        const saveResult = await saveRKASToDB(data);
+        replaced = saveResult.replaced;
       } catch (dbErr) {
         console.error('Failed to save RKAS to DB:', dbErr);
       }
 
-      return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul });
+      return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul, replaced });
     }
 
     // Local: save to upload dir + process with Python
@@ -1458,18 +603,16 @@ export async function POST(request: Request) {
     const data = await parseRKASFile(file.name);
     if (!data) return NextResponse.json({ error: 'Failed to parse RKAS' }, { status: 500 });
 
-    // Save parsed data to DB (upsert by composite key bulan+tahun+tipe)
+    // Save parsed data to DB using shared service (returns { replaced })
+    let replaced = false;
     try {
-      await db.rKASMonthDB.upsert({
-        where: { bulan_tahun_tipe: { bulan: data.bulan, tahun: data.tahun, tipe: data.tipe } },
-        update: rkasMonthToDB(data),
-        create: rkasMonthToDB(data),
-      });
+      const saveResult = await saveRKASToDB(data);
+      replaced = saveResult.replaced;
     } catch (dbErr) {
       console.error('Failed to save RKAS to DB:', dbErr);
     }
 
-    return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul });
+    return NextResponse.json({ success: true, data, tipe: data.tipe, judul: data.judul, replaced });
   } catch (error: any) {
     console.error('RKAS upload error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -1483,12 +626,8 @@ export async function DELETE(request: Request) {
     const { fileName } = body;
     if (!fileName) return NextResponse.json({ error: 'fileName is required' }, { status: 400 });
 
-    // Delete DB record
-    try {
-      await db.rKASMonthDB.deleteMany({ where: { fileName } });
-    } catch (dbErr) {
-      console.error(`Failed to delete RKAS DB record for ${fileName}:`, dbErr);
-    }
+    // Delete DB record using shared service
+    await deleteRKASFromDB(fileName);
 
     if (isServerless()) {
       await deleteFromBlob(fileName);
