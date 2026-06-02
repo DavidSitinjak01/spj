@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
-import { applyDOMPolyfills } from "@/lib/dom-polyfill";
 
 export async function GET() {
-  // Apply DOM polyfills before any pdfjs-dist imports (required for Vercel serverless)
-  applyDOMPolyfills();
-
   const diagnostics: Record<string, any> = {
     status: "ok",
     timestamp: new Date().toISOString(),
@@ -16,27 +12,15 @@ export async function GET() {
     },
   };
 
-  // Test pdf2json import (primary serverless method — worker-free)
+  // Test pdf2json import (SOLE serverless method — worker-free)
   try {
     const pdf2json = await import("pdf2json");
     diagnostics.pdf2json = {
       loaded: true,
-      hasPDFParser: typeof pdf2json.default === "function",
+      hasPDFParser: typeof pdf2json.default === "function" || typeof pdf2json === "function",
     };
   } catch (e: any) {
     diagnostics.pdf2json = { loaded: false, error: e.message };
-  }
-
-  // Test pdfjs-dist import (secondary method)
-  try {
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    diagnostics.pdfjsDist = {
-      loaded: true,
-      hasGetDocument: typeof pdfjs.getDocument === "function",
-      version: pdfjs.version || "unknown",
-    };
-  } catch (e: any) {
-    diagnostics.pdfjsDist = { loaded: false, error: e.message };
   }
 
   // Test full text extraction from a blob file
@@ -67,7 +51,7 @@ export async function GET() {
           const buffer = Buffer.concat(chunks);
           diagnostics.blobDownloadSize = buffer.length;
 
-          // Use the centralized extraction function (tries pdf2json → pdfjs-dist → simple)
+          // Use pdf2json extraction (sole method)
           try {
             const info = await processPDFBuffer(blobs[0].pathname.replace('pdfs/', ''), buffer);
             diagnostics.extractionSuccess = true;
