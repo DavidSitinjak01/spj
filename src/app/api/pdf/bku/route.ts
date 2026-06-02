@@ -49,11 +49,11 @@ function dbRecordToBKUMonth(record: {
   namaSekolah: string;
   npsn: string;
   transactions: unknown;
-  totalPenerimaan: number;
-  totalPengeluaran: number;
-  saldoAkhir: number;
-  saldoAkhirBank: number;
-  saldoAkhirTunai: number;
+  totalPenerimaan: bigint;
+  totalPengeluaran: bigint;
+  saldoAkhir: bigint;
+  saldoAkhirBank: bigint;
+  saldoAkhirTunai: bigint;
   tanggalTutup: string;
 }): BKUMonth {
   return {
@@ -64,11 +64,11 @@ function dbRecordToBKUMonth(record: {
     namaSekolah: record.namaSekolah,
     npsn: record.npsn,
     transactions: record.transactions as BKUTransaction[],
-    totalPenerimaan: record.totalPenerimaan,
-    totalPengeluaran: record.totalPengeluaran,
-    saldoAkhir: record.saldoAkhir,
-    saldoAkhirBank: record.saldoAkhirBank,
-    saldoAkhirTunai: record.saldoAkhirTunai,
+    totalPenerimaan: Number(record.totalPenerimaan),
+    totalPengeluaran: Number(record.totalPengeluaran),
+    saldoAkhir: Number(record.saldoAkhir),
+    saldoAkhirBank: Number(record.saldoAkhirBank),
+    saldoAkhirTunai: Number(record.saldoAkhirTunai),
     tanggalTutup: record.tanggalTutup,
   };
 }
@@ -81,11 +81,11 @@ function dbCreateFromBKUMonth(data: BKUMonth) {
     sumberDana: data.sumberDana,
     namaSekolah: data.namaSekolah,
     npsn: data.npsn,
-    totalPenerimaan: data.totalPenerimaan,
-    totalPengeluaran: data.totalPengeluaran,
-    saldoAkhir: data.saldoAkhir,
-    saldoAkhirBank: data.saldoAkhirBank,
-    saldoAkhirTunai: data.saldoAkhirTunai,
+    totalPenerimaan: BigInt(data.totalPenerimaan),
+    totalPengeluaran: BigInt(data.totalPengeluaran),
+    saldoAkhir: BigInt(data.saldoAkhir),
+    saldoAkhirBank: BigInt(data.saldoAkhirBank),
+    saldoAkhirTunai: BigInt(data.saldoAkhirTunai),
     tanggalTutup: data.tanggalTutup,
     transactions: data.transactions as unknown[],
   };
