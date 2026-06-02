@@ -67,14 +67,24 @@ export async function GET() {
           // Try pdfjs-dist extraction (primary method)
           try {
             const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-            try {
-              const pathMod = await import('path');
-              const fsMod = await import('fs');
-              const workerPath = pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
-              if (fsMod.existsSync(workerPath)) {
+            // Set up worker for Node.js environments
+            if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+              try {
+                const { createRequire } = await import('module');
+                const require = createRequire(import.meta.url);
+                const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
                 pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
+              } catch {
+                try {
+                  const pathMod = await import('path');
+                  const fsMod = await import('fs');
+                  const p = pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
+                  if (fsMod.existsSync(p)) {
+                    pdfjs.GlobalWorkerOptions.workerSrc = p;
+                  }
+                } catch {}
               }
-            } catch {}
+            }
 
             const uint8 = new Uint8Array(buffer);
             const loadingTask = pdfjs.getDocument({ data: uint8, verbosity: 0, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true });
@@ -98,6 +108,18 @@ export async function GET() {
             // Fallback: try pdf-parse
             try {
               const pdfParseModule = await import("pdf-parse");
+              // Set up pdfjs worker before pdf-parse uses it
+              try {
+                const pdfjsInner = await import("pdfjs-dist/legacy/build/pdf.mjs");
+                if (!pdfjsInner.GlobalWorkerOptions.workerSrc) {
+                  try {
+                    const { createRequire } = await import('module');
+                    const require = createRequire(import.meta.url);
+                    const workerPath = require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+                    pdfjsInner.GlobalWorkerOptions.workerSrc = workerPath;
+                  } catch {}
+                }
+              } catch {}
               const PDFParse = pdfParseModule.PDFParse;
               const uint8 = new Uint8Array(buffer);
               const parser = new PDFParse({ data: uint8, verbosity: 0 });

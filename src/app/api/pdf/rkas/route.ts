@@ -1049,40 +1049,66 @@ print(json.dumps(result, ensure_ascii=False))
 `;
 
 // --- Parse single RKAS file ---
-async function parseRKASFile(fileName: string, buffer?: Buffer): Promise<RKASMonth | null> {
+// Returns the parsed data, or null on failure.
+// If throwDetails is true, throws with diagnostic info instead of returning null.
+async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: boolean): Promise<RKASMonth | null> {
   if (isServerless()) {
     // Serverless: parse with pdfjs-dist + regex
     // If buffer is provided (e.g., right after upload), use it directly
     // Otherwise, download from blob
+    let diagnosticInfo: Record<string, any> = { fileName, step: 'init' };
     try {
       let info;
+      diagnosticInfo.step = 'extract';
       if (buffer) {
         info = await processPDFBuffer(fileName, buffer);
       } else {
         const blobInfo = await getBlobInfo(fileName);
         if (!blobInfo) {
           console.error(`RKAS parse: blob not found for ${fileName}`);
+          diagnosticInfo.error = 'blob_not_found';
+          if (throwDetails) throw new Error(`Blob not found for ${fileName}`);
           return null;
         }
         info = await processPDF(fileName);
       }
       const fullText = info.extractedText.map(p => p.text).join('\n');
+      diagnosticInfo.step = 'parse';
+      diagnosticInfo.textLength = fullText.length;
+      diagnosticInfo.pageCount = info.pageCount;
+      diagnosticInfo.textPreview = fullText.substring(0, 200);
       console.log(`RKAS parse: extracted ${fullText.length} chars from ${fileName}, pages: ${info.pageCount}`);
       if (!fullText.trim()) {
         console.error(`RKAS parse: no text extracted from ${fileName}`);
+        diagnosticInfo.error = 'empty_text';
+        diagnosticInfo.perPageText = info.extractedText.map(p => ({ page: p.page, len: p.text.length, preview: p.text.substring(0, 50) }));
+        if (throwDetails) throw new Error(`No text extracted from PDF. Pages: ${info.pageCount}, all pages empty. ${JSON.stringify(diagnosticInfo)}`);
         return null;
       }
       const result = parseRKASFromText(fullText, fileName);
       if (!result) {
         console.error(`RKAS parse: parseRKASFromText returned null for ${fileName}`);
+        diagnosticInfo.error = 'parse_null';
+        if (throwDetails) throw new Error(`parseRKASFromText returned null. ${JSON.stringify(diagnosticInfo)}`);
       } else if (result.allItems.length === 0) {
         console.warn(`RKAS parse: parsed ${fileName} but got 0 belanja items. Header: school=${result.namaSekolah}, npsn=${result.npsn}, penerimaan=${result.totalPenerimaan}, tipe=${result.tipe}`);
+        diagnosticInfo.warning = '0_items';
+        diagnosticInfo.parsedHeader = { school: result.namaSekolah, npsn: result.npsn, tipe: result.tipe, totalPenerimaan: result.totalPenerimaan };
+        // Don't return null for 0 items - still return the header info
       } else {
         console.log(`RKAS parse: successfully parsed ${fileName} - ${result.allItems.length} items, tipe=${result.tipe}`);
       }
       return result;
     } catch (err: any) {
       console.error(`Failed to parse RKAS ${fileName} (serverless):`, err?.message || err);
+      diagnosticInfo.error = diagnosticInfo.error || 'exception';
+      diagnosticInfo.errorMessage = err?.message || String(err);
+      diagnosticInfo.errorStack = err?.stack?.substring(0, 500);
+      if (throwDetails) {
+        const detailedErr = new Error(`RKAS parse failed: ${err?.message || String(err)} | Diagnostic: ${JSON.stringify(diagnosticInfo)}`);
+        (detailedErr as any).diagnostic = diagnosticInfo;
+        throw detailedErr;
+      }
       return null;
     }
   }
@@ -1337,12 +1363,31 @@ export async function POST(request: Request) {
     if (isServerless()) {
       // Serverless: upload to blob + parse directly from buffer
       await uploadToBlob(file.name, buffer);
-      const data = await parseRKASFile(file.name, buffer);
+
+      // Try parsing with detailed error info
+      let data: RKASMonth | null = null;
+      let parseError: Record<string, any> | null = null;
+
+      try {
+        data = await parseRKASFile(file.name, buffer, true);
+      } catch (err: any) {
+        parseError = {
+          message: err?.message || String(err),
+          diagnostic: (err as any)?.diagnostic || null,
+        };
+        // Try once more without throwDetails to see if it returns data anyway
+        try {
+          data = await parseRKASFile(file.name, buffer);
+        } catch {}
+      }
+
       if (!data) return NextResponse.json({
         error: 'Failed to parse RKAS',
-        hint: 'PDF text extraction may have failed on Vercel serverless. Check Vercel function logs for details.',
+        detail: parseError?.message || 'Unknown error',
+        diagnostic: parseError?.diagnostic || null,
         fileName: file.name,
         fileSize: buffer.length,
+        hint: 'PDF text extraction may have failed. The diagnostic info above shows which step failed.',
       }, { status: 500 });
 
       // Deduplicate: delete other blob files with same key

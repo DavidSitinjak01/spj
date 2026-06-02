@@ -405,7 +405,17 @@ export default function Home() {
         const res = await fetch('/api/pdf/rkas', { method: 'POST', body: formData })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
-          setError(err.error || 'Gagal mengimpor file RKAS')
+          // Show detailed error info including diagnostic details
+          let errorMsg = err.error || 'Gagal mengimpor file RKAS'
+          if (err.detail) {
+            errorMsg += ` — ${err.detail}`
+          }
+          if (err.diagnostic) {
+            const d = err.diagnostic
+            if (d.step) errorMsg += ` (Step: ${d.step})`
+            if (d.textLength === 0) errorMsg += ' — Teks PDF kosong'
+          }
+          setError(errorMsg)
         } else {
           const result = await res.json()
           if (result.replaced) {
@@ -452,7 +462,9 @@ export default function Home() {
         const res = await fetch('/api/pdf/bku-pajak', { method: 'POST', body: formData })
         if (!res.ok) {
           const err = await res.json().catch(() => ({}))
-          setError(err.error || 'Gagal mengimpor file BKU Pajak')
+          let errorMsg = err.error || 'Gagal mengimpor file BKU Pajak'
+          if (err.detail) errorMsg += ` — ${err.detail}`
+          setError(errorMsg)
         } else {
           const result = await res.json()
           if (result.replaced) {
