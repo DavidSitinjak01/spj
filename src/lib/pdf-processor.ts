@@ -201,13 +201,173 @@ export async function getBlobUrl(fileName: string): Promise<string | null> {
   return info?.url || null;
 }
 
-// --- PDF text extraction using pdf-parse v2.4.5 ---
+// --- PDF text extraction using pdfjs-dist directly ---
+// Works in both Node.js local and Vercel serverless environments.
+// Uses pdfjs-dist/legacy for Node.js compatibility with position-aware
+// text extraction that preserves tab separation for table parsing.
 
 /**
- * Extract text from a PDF buffer using pdf-parse (PDFParse class).
- * This works in both Node.js local and Vercel serverless environments
- * because pdf-parse includes proper Node.js polyfills (unlike raw pdfjs-dist
- * which requires browser APIs like DOMMatrix).
+ * Extract text from a PDF buffer using pdfjs-dist directly.
+ * Falls back to pdf-parse if pdfjs-dist fails.
+ * Uses position-aware text extraction to preserve table structure with tab separation.
+ */
+async function extractTextFromPDF(buffer: Buffer): Promise<{
+  text: string;
+  numpages: number;
+  info: Record<string, unknown>;
+  perPageText: { page: number; text: string }[];
+}> {
+  // Try pdfjs-dist direct approach first (most reliable on Vercel)
+  try {
+    return await extractTextWithPdfjsDist(buffer);
+  } catch (pdfjsErr: any) {
+    console.warn('pdfjs-dist extraction failed, trying pdf-parse fallback:', pdfjsErr?.message || pdfjsErr);
+  }
+
+  // Fallback: try pdf-parse
+  try {
+    return await extractTextWithPdfParse(buffer);
+  } catch (pdfParseErr: any) {
+    console.error('Both pdfjs-dist and pdf-parse extraction failed:', pdfParseErr?.message || pdfParseErr);
+    throw new Error(`PDF text extraction failed: pdfjs-dist error and pdf-parse error`);
+  }
+}
+
+/**
+ * Extract text using pdfjs-dist directly with position-aware text extraction.
+ * This produces tab-separated text that preserves table structure, which is
+ * critical for parsing RKAS/BKU tables.
+ */
+async function extractTextWithPdfjsDist(buffer: Buffer): Promise<{
+  text: string;
+  numpages: number;
+  info: Record<string, unknown>;
+  perPageText: { page: number; text: string }[];
+}> {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
+  // Set up worker - use file path for Node.js, empty for serverless
+  try {
+    const pathMod = await import('path');
+    const fsMod = await import('fs');
+    const workerPath = pathMod.join(
+      process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'
+    );
+    if (fsMod.existsSync(workerPath)) {
+      pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
+    }
+  } catch {
+    // Worker file not available (e.g., on Vercel read-only fs)
+    // pdfjs-dist will use fake worker (in-process) as fallback
+  }
+
+  const uint8 = new Uint8Array(buffer);
+  const loadingTask = pdfjs.getDocument({
+    data: uint8,
+    verbosity: 0,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    useSystemFonts: true,
+  });
+
+  const doc = await loadingTask.promise;
+  const perPageText: { page: number; text: string }[] = [];
+  let fullText = '';
+
+  for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+    const page = await doc.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const viewport = page.getViewport({ scale: 1 });
+
+    // Position-aware text extraction: group items by Y position (same line),
+    // then sort by X position and join with tabs when there's significant gap
+    const items = textContent.items
+      .filter((item: any) => item.str !== undefined && item.str !== '')
+      .map((item: any) => ({
+        str: item.str,
+        x: item.transform[4],     // X position
+        y: item.transform[5],     // Y position (PDF Y-axis is bottom-up)
+        width: item.width || 0,
+        height: item.height || 0,
+        fontName: item.fontName || '',
+      }));
+
+    // Group items into lines by Y position (within tolerance)
+    const LINE_TOLERANCE = 2; // pixels tolerance for same line
+    const lines: { y: number; items: typeof items }[] = [];
+
+    for (const item of items) {
+      // Find existing line within tolerance
+      let foundLine = false;
+      for (const line of lines) {
+        if (Math.abs(line.y - item.y) <= LINE_TOLERANCE) {
+          line.items.push(item);
+          foundLine = true;
+          break;
+        }
+      }
+      if (!foundLine) {
+        lines.push({ y: item.y, items: [item] });
+      }
+    }
+
+    // Sort lines by Y position (descending because PDF Y-axis is bottom-up)
+    lines.sort((a, b) => b.y - a.y);
+
+    // For each line, sort items by X position and join with tabs
+    const MIN_GAP_FOR_TAB = 8; // minimum gap in pixels to insert a tab
+    const pageLines: string[] = [];
+
+    for (const line of lines) {
+      line.items.sort((a, b) => a.x - b.x);
+
+      let lineText = '';
+      let lastX = -Infinity;
+      let lastWidth = 0;
+
+      for (const item of line.items) {
+        const gap = item.x - (lastX + lastWidth);
+        if (lastX > -Infinity && gap > MIN_GAP_FOR_TAB) {
+          lineText += '\t';
+        } else if (lastX > -Infinity && gap > 0) {
+          lineText += ' ';
+        }
+        lineText += item.str;
+        lastX = item.x;
+        lastWidth = item.width;
+      }
+
+      pageLines.push(lineText);
+    }
+
+    const pageText = pageLines.join('\n');
+    perPageText.push({ page: pageNum, text: pageText });
+    fullText += pageText + '\n';
+    page.cleanup();
+  }
+
+  // Get document metadata
+  let info: Record<string, unknown> = {};
+  try {
+    const metadata = await doc.getMetadata();
+    if (metadata?.info) info = metadata.info as Record<string, unknown>;
+  } catch {
+    // Metadata not available, continue
+  }
+
+  try { doc.destroy(); } catch {}
+
+  return {
+    text: fullText.trim(),
+    numpages: perPageText.length,
+    info,
+    perPageText,
+  };
+}
+
+/**
+ * Fallback: Extract text using pdf-parse (PDFParse class).
+ * This is the fallback if pdfjs-dist direct approach fails.
  */
 async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   text: string;
@@ -215,12 +375,14 @@ async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   info: Record<string, unknown>;
   perPageText: { page: number; text: string }[];
 }> {
-  // pdf-parse v2.4.5 exports a PDFParse class
-  // Must use Uint8Array instead of Buffer (pdf-parse v2 requirement)
   const pdfParseModule = await import('pdf-parse');
   const PDFParse = pdfParseModule.PDFParse;
+  if (!PDFParse) {
+    throw new Error('PDFParse class not available in pdf-parse module');
+  }
+  // pdf-parse v2.4.5 PDFParse takes a single options object
   const uint8 = new Uint8Array(buffer);
-  const parser = new PDFParse(uint8, { verbosity: 0 });
+  const parser = new PDFParse({ data: uint8, verbosity: 0 });
   await parser.load();
 
   // Get text from all pages
@@ -240,13 +402,15 @@ async function extractTextWithPdfParse(buffer: Buffer): Promise<{
   // Get document metadata
   let info: Record<string, unknown> = {};
   try {
-    const docInfo = parser.getInfo();
+    const docInfo = await parser.getInfo();
     if (docInfo) {
       info = docInfo as Record<string, unknown>;
     }
   } catch {
     // Metadata not available, continue
   }
+
+  try { await parser.destroy(); } catch {}
 
   return {
     text: fullText.trim(),
@@ -286,7 +450,7 @@ export async function getPDFFiles(): Promise<string[]> {
  * Use this after upload to avoid race conditions with Blob indexing.
  */
 export async function processPDFBuffer(fileName: string, buffer: Buffer, filePath?: string): Promise<PDFInfo> {
-  const parsed = await extractTextWithPdfParse(buffer);
+  const parsed = await extractTextFromPDF(buffer);
 
   return {
     fileName,
@@ -298,7 +462,7 @@ export async function processPDFBuffer(fileName: string, buffer: Buffer, filePat
 
 export async function processPDF(fileName: string): Promise<PDFInfo> {
   if (isServerless()) {
-    // Serverless: download from private blob using get() + pdf-parse
+    // Serverless: download from private blob using get() + text extraction
     // Use pathname-based download which handles private store authentication automatically
     const pathname = `${BLOB_PREFIX}${fileName}`;
     const buffer = await downloadFromBlobByPathname(pathname);

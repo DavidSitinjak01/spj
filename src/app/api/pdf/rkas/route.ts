@@ -384,42 +384,92 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
       const tabs = line.split('\t');
       
       if (isTahunanTable) {
-        // Tahunan format:
-        // "1 02." \t "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0" \t "0 0 0 0 0 0"
-        // "4 02.02.01." \t "5.1.02.01.01.0052 Belanja Makanan 7.698.000 7.698.000 0 0 0" \t "0 0 0 0 0 0"
-        // "5 02.02.01." \t "5.1.02.01.01.0052 001. Snack Kotak-- 2.250.000 2.250.000 0 0 0" \t "0 0 0 0 0 0"
+        // Tahunan format - handles BOTH pdf-parse and pdfjs-dist extraction formats:
+        //
+        // pdf-parse format:
+        //   "1 02." \t "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0" \t "0 0 0 0 0 0"
+        //   "4 02.02.01." \t "5.1.02.01.01.0052 Belanja Makanan 7.698.000 7.698.000 0 0 0" \t "0 0 0 0 0 0"
+        //   "5 02.02.01." \t "5.1.02.01.01.0052 001. Snack Kotak-- 2.250.000 2.250.000 0 0 0" \t "0 0 0 0 0 0"
+        //
+        // pdfjs-dist format:
+        //   "1 02. Pengembangan Standar Isi 19.530.000  19.530.000  0 0 0 0 0 0 0" \t "0 0"
+        //   "4 5.1.02.01.01.0052 02.02.01." \t "Belanja Makanan dan Minuman Rapat 7.698.000  7.698.000  0 0 0 0 0 0 0" \t "0 0"
+        //   "5 5.1.02.01.01.0052 02.02.01." \t "001. Snack Kotak-- 2.250.000  2.250.000  0 0 0 0 0 0 0" \t "0 0"
         
-        if (tabs.length < 2) continue;
+        if (tabs.length < 1) continue;
         
         const firstPart = tabs[0].trim();
         const secondPart = tabs[1]?.trim() || '';
         
-        // Parse first part: noUrut + kodeProgram
-        const firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
-        if (!firstMatch) continue;
-        
-        const noUrut = firstMatch[1];
-        const kodeProgram = firstMatch[2];
-        
-        // Parse second part: optional kodeRekening + uraian + jumlah
+        // Parse first part: noUrut + optional kodeRekening + kodeProgram
+        let noUrut = '';
+        let kodeProgram = '';
         let kodeRekening = '';
+        
+        // Try pdf-parse format: "4 02.02.01." (noUrut + kodeProgram only)
+        let firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
+        if (firstMatch) {
+          noUrut = firstMatch[1];
+          kodeProgram = firstMatch[2];
+        } else {
+          // Try pdfjs-dist format: "4 5.1.02.01.01.0052 02.02.01." (noUrut + kodeRekening + kodeProgram)
+          const pdfjsMatch = reMatch(/^(\d+)\s+(5\.\d+\.[\d.]+)\s+([\d.]+\.?)$/, firstPart);
+          if (pdfjsMatch) {
+            noUrut = pdfjsMatch[1];
+            kodeRekening = pdfjsMatch[2];
+            kodeProgram = pdfjsMatch[3];
+          } else {
+            // Try without kodeRekening: "1 02." or "1 02. Pengembangan..." (all in one line)
+            // This happens with pdfjs-dist when kode program and uraian are close together
+            const simpleMatch = reMatch(/^(\d+)\s+([\d.]+\.?)\s+(.+)$/, firstPart);
+            if (simpleMatch) {
+              noUrut = simpleMatch[1];
+              kodeProgram = simpleMatch[2];
+              // The rest might contain uraian + jumlah if it's all on one line
+              // We'll handle this below
+            } else {
+              // One more try: "19 03. Standar Proses 76.004.000 ..."
+              const noKodeRekMatch = reMatch(/^(\d+)\s+([\d.]+\.\s+)/, firstPart);
+              if (noKodeRekMatch) {
+                noUrut = noKodeRekMatch[1];
+                kodeProgram = noKodeRekMatch[2].trim();
+              } else {
+                continue;
+              }
+            }
+          }
+        }
+        
+        // Determine the remaining text to parse for uraian + jumlah
+        let uraianSource = secondPart;
+        
+        // If firstPart contains more than just noUrut+kodeProgram (pdfjs-dist format),
+        // the extra text is the uraian + jumlah
+        // Only apply firstPartExtra when using simpleMatch (not pdfjsMatch),
+        // because when pdfjsMatch matched, the first part is exactly "noUrut kodeRekening kodeProgram"
+        // with no extra uraian content
+        if (!kodeRekening) {
+          const firstPartExtra = reMatch(/^\d+\s+(?:5\.\d+\.[\d.]+\s+)?[\d.]+\.?\s+(.+)$/, firstPart);
+          if (firstPartExtra) {
+            uraianSource = firstPartExtra[1] + (secondPart ? '\t' + secondPart : '');
+          }
+        }
+        
+        // Parse uraian + jumlah from the source text
         let uraian = '';
         let jumlah = '';
         
-        // Check if second part starts with kode rekening (5.x.x.x pattern)
-        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, secondPart);
-        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1])) {
+        // Check if uraianSource starts with kode rekening (5.x.x.x pattern)
+        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, uraianSource);
+        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1]) && !kodeRekening) {
           kodeRekening = kodeRekMatch[1];
           const rest = kodeRekMatch[2];
           // Extract uraian and first jumlah from rest
-          // Format: "001. Snack Kotak-- 2.250.000 2.250.000 0 0 0"
-          // or: "Belanja Makanan 7.698.000 7.698.000 0 0 0"
           const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, rest);
           if (uraianJumlahMatch) {
             uraian = uraianJumlahMatch[1].trim();
             jumlah = uraianJumlahMatch[2];
           } else {
-            // Try simpler: uraian followed by amounts
             const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, rest);
             if (simpleUJ) {
               uraian = simpleUJ[1].trim();
@@ -427,19 +477,19 @@ function parseRKASFromText(text: string, fileName: string): RKASMonth | null {
             }
           }
         } else {
-          // No kode rekening - this is a category/sub row
-          // Format: "Pengembangan Standar Isi 19.530.000 19.530.000 0 0 0"
-          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, secondPart);
-          if (uraianJumlahMatch) {
-            uraian = uraianJumlahMatch[1].trim();
-            jumlah = uraianJumlahMatch[2];
+          // No kode rekening (or already extracted) - this is a category/sub row or uraian+jumlah directly
+          // Try simpleUJ first (extracts first number as jumlah), then uraianJumlahMatch as fallback
+          const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, uraianSource);
+          if (simpleUJ) {
+            uraian = simpleUJ[1].trim();
+            jumlah = simpleUJ[2];
           } else {
-            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, secondPart);
-            if (simpleUJ) {
-              uraian = simpleUJ[1].trim();
-              jumlah = simpleUJ[2];
+            const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, uraianSource);
+            if (uraianJumlahMatch) {
+              uraian = uraianJumlahMatch[1].trim();
+              jumlah = uraianJumlahMatch[2];
             } else {
-              uraian = secondPart;
+              uraian = uraianSource;
             }
           }
         }
@@ -1288,7 +1338,12 @@ export async function POST(request: Request) {
       // Serverless: upload to blob + parse directly from buffer
       await uploadToBlob(file.name, buffer);
       const data = await parseRKASFile(file.name, buffer);
-      if (!data) return NextResponse.json({ error: 'Failed to parse RKAS', hint: 'Text extraction may have failed or returned empty data' }, { status: 500 });
+      if (!data) return NextResponse.json({
+        error: 'Failed to parse RKAS',
+        hint: 'PDF text extraction may have failed on Vercel serverless. Check Vercel function logs for details.',
+        fileName: file.name,
+        fileSize: buffer.length,
+      }, { status: 500 });
 
       // Deduplicate: delete other blob files with same key
       let replacedFile: string | null = null;

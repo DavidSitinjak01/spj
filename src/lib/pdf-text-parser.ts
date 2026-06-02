@@ -675,22 +675,64 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
       const tabs = line.split('\t');
 
       if (isTahunanTable) {
-        if (tabs.length < 2) continue;
+        // Tahunan format - handles BOTH pdf-parse and pdfjs-dist extraction formats
+        if (tabs.length < 1) continue;
         const firstPart = tabs[0].trim();
         const secondPart = tabs[1]?.trim() || '';
 
-        const firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
-        if (!firstMatch) continue;
-
-        const noUrut = firstMatch[1];
-        const kodeProgram = firstMatch[2];
-
+        // Parse first part: noUrut + optional kodeRekening + kodeProgram
+        let noUrut = '';
+        let kodeProgram = '';
         let kodeRekening = '';
+
+        // Try pdf-parse format: "4 02.02.01." (noUrut + kodeProgram only)
+        let firstMatch = reMatch(/^(\d+)\s+([\d.]+\.?)$/, firstPart);
+        if (firstMatch) {
+          noUrut = firstMatch[1];
+          kodeProgram = firstMatch[2];
+        } else {
+          // Try pdfjs-dist format: "4 5.1.02.01.01.0052 02.02.01." (noUrut + kodeRekening + kodeProgram)
+          const pdfjsMatch = reMatch(/^(\d+)\s+(5\.\d+\.[\d.]+)\s+([\d.]+\.?)$/, firstPart);
+          if (pdfjsMatch) {
+            noUrut = pdfjsMatch[1];
+            kodeRekening = pdfjsMatch[2];
+            kodeProgram = pdfjsMatch[3];
+          } else {
+            // Try: "1 02. Pengembangan..." or "19 03. Standar Proses 76.004.000 ..."
+            const simpleMatch = reMatch(/^(\d+)\s+([\d.]+\.?)\s+(.+)$/, firstPart);
+            if (simpleMatch) {
+              noUrut = simpleMatch[1];
+              kodeProgram = simpleMatch[2];
+            } else {
+              const noKodeRekMatch = reMatch(/^(\d+)\s+([\d.]+\.\s+)/, firstPart);
+              if (noKodeRekMatch) {
+                noUrut = noKodeRekMatch[1];
+                kodeProgram = noKodeRekMatch[2].trim();
+              } else {
+                continue;
+              }
+            }
+          }
+        }
+
+        // Determine the remaining text to parse for uraian + jumlah
+        let uraianSource = secondPart;
+        // Only apply firstPartExtra when using simpleMatch (not pdfjsMatch),
+        // because when pdfjsMatch matched, the first part is exactly "noUrut kodeRekening kodeProgram"
+        // with no extra uraian content
+        if (!kodeRekening) {
+          const firstPartExtra = reMatch(/^\d+\s+(?:5\.\d+\.[\d.]+\s+)?[\d.]+\.?\s+(.+)$/, firstPart);
+          if (firstPartExtra) {
+            uraianSource = firstPartExtra[1] + (secondPart ? '\t' + secondPart : '');
+          }
+        }
+
         let uraian = '';
         let jumlah = '';
 
-        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, secondPart);
-        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1])) {
+        // Check if uraianSource starts with kode rekening (5.x.x.x pattern)
+        const kodeRekMatch = reMatch(/^(\d+\.[\d.]+)\s+(.+)$/, uraianSource);
+        if (kodeRekMatch && reMatch(/^5\./, kodeRekMatch[1]) && !kodeRekening) {
           kodeRekening = kodeRekMatch[1];
           const rest = kodeRekMatch[2];
           const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, rest);
@@ -702,32 +744,132 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
             if (simpleUJ) { uraian = simpleUJ[1].trim(); jumlah = simpleUJ[2]; }
           }
         } else {
-          const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, secondPart);
-          if (uraianJumlahMatch) {
-            uraian = uraianJumlahMatch[1].trim();
-            jumlah = uraianJumlahMatch[2];
+          // No kode rekening (or already extracted) - category/sub row or uraian+jumlah directly
+          // Try simpleUJ first (extracts first number as jumlah), then uraianJumlahMatch as fallback
+          const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, uraianSource);
+          if (simpleUJ) {
+            uraian = simpleUJ[1].trim();
+            jumlah = simpleUJ[2];
           } else {
-            const simpleUJ = reMatch(/^(.+?)\s+([\d.]+)\s/, secondPart);
-            if (simpleUJ) { uraian = simpleUJ[1].trim(); jumlah = simpleUJ[2]; }
-            else uraian = secondPart;
+            const uraianJumlahMatch = reMatch(/^(.+?)\s+([\d.]+)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+$/, uraianSource);
+            if (uraianJumlahMatch) {
+              uraian = uraianJumlahMatch[1].trim();
+              jumlah = uraianJumlahMatch[2];
+            } else {
+              uraian = uraianSource;
+            }
           }
         }
 
         belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume: '', satuan: '', tarifHarga: '', jumlah });
       } else {
-        // Bulanan format with tabs
+        // Bulanan format with tabs - handles BOTH pdf-parse and pdfjs-dist extraction formats
         if (!reSearch(/^\d/, line.replace(/^\s*/, ''))) continue;
         if (upperLine.startsWith('HALAMAN')) continue;
 
-        let kodeProgSuffix = '';
-        let mainDataPart = '';
-        let volumePart = '';
-        let kodeRekening = '';
-        let kodeProgParts: string[] = [];
-
         const firstPart = tabs[0].trim();
 
-        if (reMatch(/^(\d{2})\.\s*$/, firstPart)) {
+        // Detect pdfjs-dist format: first part contains kodeRekening (5.x.x.x)
+        // e.g., "4. 5.1.02.01.01.0052" or "1. 03."
+        const isPdfjsDistFormat = reMatch(/^\d+\.\s+5\.\d+\.[\d.]+/, firstPart);
+
+        if (isPdfjsDistFormat) {
+          // pdfjs-dist bulanan format:
+          // "4. 5.1.02.01.01.0052\t03. 03. 08. Nasi Bungkus-- 90 per bungkus  35.000\t3.150.000"
+          // "1. 03.\tStandar Proses 5.364.000"
+
+          // Parse first part: noUrut + kodeRekening
+          const firstParse = reMatch(/^(\d+)\.\s+(5\.\d+\.[\d.]+)/, firstPart);
+          if (!firstParse) continue;
+          const noUrut = firstParse[1];
+          const kodeRekening = firstParse[2];
+
+          // Parse remaining tab parts for kodeProgram + uraian + volume/satuan/tarif + jumlah
+          const remaining = tabs.slice(1).join('\t');
+          let kodeProgram = '';
+          let uraian = '';
+          let volume = '';
+          let satuan = '';
+          let tarifHarga = '';
+          let jumlah = '';
+
+          if (remaining) {
+            // Try to extract kodeProgram from the beginning
+            // Format: "03. 03. 08. Nasi Bungkus-- 90 per bungkus  35.000\t3.150.000"
+            // or: "Standar Proses 5.364.000" (no kode program for category rows)
+
+            // First, check if it starts with kode program pattern (##. ##. ##.)
+            const kodeProgMatch = reMatch(/^([\d.]+\s+)+/, remaining);
+            if (kodeProgMatch) {
+              const kodeProgStr = kodeProgMatch[0].trim();
+              // Check if it looks like a kode program (contains dots and spaces like "03. 03. 08.")
+              if (reMatch(/^(\d{2}\.\s*)+$/, kodeProgStr) || reMatch(/^\d{2}\.\s(\d{2}\.\s*)*/, kodeProgStr)) {
+                kodeProgram = kodeProgStr.replace(/\s/g, '');
+                const rest = remaining.substring(kodeProgMatch[0].length).trim();
+
+                // Rest contains: uraian + volume/satuan/tarif + jumlah
+                // Try to parse with volume info
+                // "Nasi Bungkus-- 90 per bungkus  35.000\t3.150.000"
+                const tabParts = rest.split('\t');
+                const lastPart = tabParts[tabParts.length - 1]?.trim() || '';
+
+                // Check if last part is a jumlah (number)
+                if (reMatch(/^[\d.]+$/, lastPart)) {
+                  jumlah = lastPart;
+                  const uraianVolPart = tabParts.slice(0, -1).join('\t').trim();
+                  // Parse uraian + volume from uraianVolPart
+                  // "Nasi Bungkus-- 90 per bungkus  35.000"
+                  const volMatch = reMatch(/^(.+?)\s+(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, uraianVolPart);
+                  if (volMatch) {
+                    uraian = volMatch[1].trim();
+                    volume = volMatch[2];
+                    satuan = volMatch[3].trim();
+                    tarifHarga = volMatch[4];
+                  } else {
+                    uraian = uraianVolPart;
+                  }
+                } else {
+                  // jumlah might be at the end of the text
+                  // "Pelaksanaan Kegiatan 5.364.000"
+                  const simpleMatch = reMatch(/^(.+?)\s+([\d.]+)\s*$/, rest);
+                  if (simpleMatch) {
+                    uraian = simpleMatch[1].trim();
+                    jumlah = simpleMatch[2];
+                  } else {
+                    uraian = rest;
+                  }
+                }
+              } else {
+                // Not a kode program, treat as uraian
+                const simpleMatch = reMatch(/^(.+?)\s+([\d.]+)\s*$/, remaining);
+                if (simpleMatch) {
+                  uraian = simpleMatch[1].trim();
+                  jumlah = simpleMatch[2];
+                } else {
+                  uraian = remaining;
+                }
+              }
+            } else {
+              // No kode program at the beginning
+              const simpleMatch = reMatch(/^(.+?)\s+([\d.]+)\s*$/, remaining);
+              if (simpleMatch) {
+                uraian = simpleMatch[1].trim();
+                jumlah = simpleMatch[2];
+              } else {
+                uraian = remaining;
+              }
+            }
+          }
+
+          belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah });
+        } else if (reMatch(/^(\d{2})\.\s*$/, firstPart)) {
+          // pdf-parse bulanan format: first part is kode program suffix
+          let kodeProgSuffix = '';
+          let mainDataPart = '';
+          let volumePart = '';
+          let kodeRekening = '';
+          let kodeProgParts: string[] = [];
+
           kodeProgSuffix = firstPart.trim();
           mainDataPart = tabs[1]?.trim() || '';
           const remaining = tabs.slice(2);
@@ -743,7 +885,35 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
             if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) kodeRekening = trimmed;
             else if (reMatch(/^\d{2}\.\s*$/, trimmed)) kodeProgParts.push(trimmed);
           }
+
+          const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
+          if (!mainMatch) continue;
+
+          const noUrut = mainMatch[1];
+          const uraian = mainMatch[2].trim();
+          const jumlah = mainMatch[3];
+          const kodeProgram = [...kodeProgParts, kodeProgSuffix].join('').replace(/\s/g, '');
+
+          let volume = '';
+          let satuan = '';
+          let tarifHarga = '';
+          if (volumePart) {
+            const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
+            if (volMatch) { volume = volMatch[1]; satuan = volMatch[2].trim(); tarifHarga = volMatch[3]; }
+            else {
+              const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
+              if (volMatch2) { volume = volMatch2[1]; satuan = volMatch2[2].trim(); }
+            }
+          }
+
+          belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah });
         } else {
+          // pdf-parse bulanan format: first part is noUrut+uraian+jumlah
+          let mainDataPart = '';
+          let volumePart = '';
+          let kodeRekening = '';
+          let kodeProgParts: string[] = [];
+
           mainDataPart = firstPart;
           const remaining = tabs.slice(1);
           let volIdx = 0;
@@ -758,29 +928,29 @@ export function parseRKASFromText(text: string, fileName: string): RKASMonthData
             if (reMatch(/^5\.\d+\.[\d.]+$/, trimmed)) kodeRekening = trimmed;
             else if (reMatch(/^\d{2}\.\s*$/, trimmed)) kodeProgParts.push(trimmed);
           }
-        }
 
-        const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
-        if (!mainMatch) continue;
+          const mainMatch = reMatch(/^(\d+)\.\s+(.+?)\s+([\d.]+)$/, mainDataPart);
+          if (!mainMatch) continue;
 
-        const noUrut = mainMatch[1];
-        const uraian = mainMatch[2].trim();
-        const jumlah = mainMatch[3];
-        const kodeProgram = [...kodeProgParts, kodeProgSuffix].join('').replace(/\s/g, '');
+          const noUrut = mainMatch[1];
+          const uraian = mainMatch[2].trim();
+          const jumlah = mainMatch[3];
+          const kodeProgram = [...kodeProgParts].join('').replace(/\s/g, '');
 
-        let volume = '';
-        let satuan = '';
-        let tarifHarga = '';
-        if (volumePart) {
-          const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
-          if (volMatch) { volume = volMatch[1]; satuan = volMatch[2].trim(); tarifHarga = volMatch[3]; }
-          else {
-            const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
-            if (volMatch2) { volume = volMatch2[1]; satuan = volMatch2[2].trim(); }
+          let volume = '';
+          let satuan = '';
+          let tarifHarga = '';
+          if (volumePart) {
+            const volMatch = reMatch(/^(\d[\d.]*)\s+(.+?)\s+([\d.]+)$/, volumePart);
+            if (volMatch) { volume = volMatch[1]; satuan = volMatch[2].trim(); tarifHarga = volMatch[3]; }
+            else {
+              const volMatch2 = reMatch(/^(\d[\d.]*)\s+(.+)$/, volumePart);
+              if (volMatch2) { volume = volMatch2[1]; satuan = volMatch2[2].trim(); }
+            }
           }
-        }
 
-        belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah });
+          belanjaRaw.push({ noUrut, kodeRekening, kodeProgram, uraian, volume, satuan, tarifHarga, jumlah });
+        }
       }
     }
   } else {

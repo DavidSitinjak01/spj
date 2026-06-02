@@ -9,20 +9,30 @@ export async function GET() {
       NODE_ENV: process.env.NODE_ENV || "not set",
       hasBlobToken: !!process.env.BLOB_READ_WRITE_TOKEN,
       hasDatabaseUrl: !!process.env.DATABASE_URL,
-      blobTokenPrefix: process.env.BLOB_READ_WRITE_TOKEN?.substring(0, 20) + "..." || "NOT SET",
     },
   };
 
-  // Test pdf-parse import (pdf-parse v2.4.5 with PDFParse class)
+  // Test pdfjs-dist import (primary extraction method)
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    diagnostics.pdfjsDist = {
+      loaded: true,
+      hasGetDocument: typeof pdfjs.getDocument === "function",
+      version: pdfjs.version || "unknown",
+    };
+  } catch (e: any) {
+    diagnostics.pdfjsDist = { loaded: false, error: e.message };
+  }
+
+  // Test pdf-parse import (fallback extraction method)
   try {
     const pdfParseModule = await import("pdf-parse");
     diagnostics.pdfParse = {
       loaded: true,
       hasPDFParse: typeof pdfParseModule.PDFParse === "function",
-      exports: Object.keys(pdfParseModule).filter(k => typeof pdfParseModule[k] === "function" || typeof pdfParseModule[k] === "object"),
     };
   } catch (e: any) {
-    diagnostics.pdfParse = { loaded: false, error: e.message, stack: e.stack?.substring(0, 300) };
+    diagnostics.pdfParse = { loaded: false, error: e.message };
   }
 
   // Test full text extraction from a blob file
@@ -54,23 +64,55 @@ export async function GET() {
           const buffer = Buffer.concat(chunks);
           diagnostics.blobDownloadSize = buffer.length;
 
-          // Try to extract text with pdf-parse
+          // Try pdfjs-dist extraction (primary method)
           try {
-            const pdfParseModule = await import("pdf-parse");
-            const PDFParse = pdfParseModule.PDFParse;
+            const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+            try {
+              const pathMod = await import('path');
+              const fsMod = await import('fs');
+              const workerPath = pathMod.join(process.cwd(), 'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
+              if (fsMod.existsSync(workerPath)) {
+                pdfjs.GlobalWorkerOptions.workerSrc = workerPath;
+              }
+            } catch {}
+
             const uint8 = new Uint8Array(buffer);
-            const parser = new PDFParse(uint8, { verbosity: 0 });
-            await parser.load();
-            const textResult = await parser.getText({});
-            diagnostics.pdfPageCount = textResult.pages?.length || 0;
-            if (textResult.pages && textResult.pages.length > 0) {
-              diagnostics.pdfTextPreview = textResult.pages[0].text?.substring(0, 200) || "(empty)";
-              diagnostics.pdfTextLength = textResult.pages[0].text?.length || 0;
+            const loadingTask = pdfjs.getDocument({ data: uint8, verbosity: 0, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true });
+            const doc = await loadingTask.promise;
+            diagnostics.pdfjsPageCount = doc.numPages;
+
+            // Extract text from first page
+            const page = await doc.getPage(1);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map((item: any) => item.str).join(' ');
+            diagnostics.pdfjsTextPreview = pageText.substring(0, 200);
+            diagnostics.pdfjsTextLength = pageText.length;
+            diagnostics.pdfjsExtractionSuccess = true;
+
+            page.cleanup();
+            try { doc.destroy(); } catch {}
+          } catch (pdfjsErr: any) {
+            diagnostics.pdfjsExtractionError = pdfjsErr.message;
+            diagnostics.pdfjsExtractionStack = pdfjsErr.stack?.substring(0, 300);
+
+            // Fallback: try pdf-parse
+            try {
+              const pdfParseModule = await import("pdf-parse");
+              const PDFParse = pdfParseModule.PDFParse;
+              const uint8 = new Uint8Array(buffer);
+              const parser = new PDFParse({ data: uint8, verbosity: 0 });
+              await parser.load();
+              const textResult = await parser.getText({});
+              diagnostics.pdfParsePageCount = textResult.pages?.length || 0;
+              if (textResult.pages && textResult.pages.length > 0) {
+                diagnostics.pdfParseTextPreview = textResult.pages[0].text?.substring(0, 200) || "(empty)";
+                diagnostics.pdfParseTextLength = textResult.pages[0].text?.length || 0;
+              }
+              diagnostics.pdfParseExtractionSuccess = true;
+              try { await parser.destroy(); } catch {}
+            } catch (pdfParseErr: any) {
+              diagnostics.pdfParseExtractionError = pdfParseErr.message;
             }
-            diagnostics.pdfExtractionSuccess = true;
-          } catch (pdfErr: any) {
-            diagnostics.pdfExtractionError = pdfErr.message;
-            diagnostics.pdfExtractionStack = pdfErr.stack?.substring(0, 300);
           }
         }
       } catch (dlErr: any) {
