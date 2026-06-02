@@ -82,3 +82,25 @@ Stage Summary:
 - Fix: Use require.resolve() to dynamically find the worker file at runtime
 - Debug endpoint at /api/pdf/debug for future diagnosis
 - Pushed to GitHub commit 69470ce, deploying to Vercel at https://spj-five.vercel.app/
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix "DOMMatrix is not defined" error causing "Failed to parse RKAS" / 500 on Vercel serverless
+
+Work Log:
+- Read current code files: pdf-processor.ts, pdf-text-parser.ts, RKAS route, debug route, diagnostic route
+- Identified root cause: pdfjs-dist requires DOMMatrix (a browser API) that doesn't exist in Node.js serverless on Vercel
+- All three extraction methods failed because they all ultimately depend on pdfjs-dist which needs DOMMatrix
+- Installed 'dommatrix' npm package as a proper DOMMatrix polyfill
+- Added ensureDOMPolyfills() function to pdf-processor.ts that polyfills DOMMatrix, DOMPoint, and DOMRect on globalThis
+- Applied polyfills at module load time AND inside each extraction function as safety net
+- Created instrumentation.ts to apply polyfills at server startup (before any route code runs)
+- Enabled instrumentationHook in next.config.ts
+- Added polyfill calls to debug and diagnostic route files
+- Committed and pushed to GitHub for Vercel deployment
+
+Stage Summary:
+- Root cause: DOMMatrix is a browser API not available in Node.js serverless (Vercel)
+- Fix: Polyfill DOMMatrix, DOMPoint, DOMRect on globalThis before pdfjs-dist is imported
+- Multiple safety layers: instrumentation.ts (server startup), module-level (pdf-processor.ts), function-level (each extraction function)
+- Deployed as commit b7d57d7 to https://github.com/DavidSitinjak01/spj.git
