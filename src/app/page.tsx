@@ -115,28 +115,28 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { loadAvailablePDF(); loadBKU(); loadRKAS(); loadBKUPajak(); loadSPJ(); loadToko(); loadSekolah(); loadKopRows(); loadBPU(); loadBNU() }, [])
+  useEffect(() => {
+    // Stagger API calls to avoid overwhelming the server
+    const init = async () => {
+      // Priority 1: Core data
+      await Promise.all([loadBKU(), loadRKAS(), loadBKUPajak()])
+      // Priority 2: Supporting data (after a small delay)
+      await new Promise(r => setTimeout(r, 500))
+      await Promise.all([loadSPJ(), loadToko(), loadSekolah(), loadKopRows()])
+      // Priority 3: Secondary data
+      await new Promise(r => setTimeout(r, 500))
+      await Promise.all([loadBPU(), loadBNU()])
+    }
+    init()
+  }, [])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
 
   const loadAvailablePDF = async () => {
+    // Skip auto-loading PDF on startup — it's too heavy and crashes the dev server
+    // The BKU/RKAS/BKU Pajak tabs load their own data separately
     setError(null)
-    setLoading(true)
-    try {
-      const listRes = await fetch('/api/pdf/info')
-      if (listRes.ok) {
-        const listData = await listRes.json()
-        const files: string[] = listData.files || []
-        const generalPdfs = files.filter(f => {
-          const lower = f.toLowerCase()
-          return !lower.includes('bku') && !lower.includes('rkas') && !lower.includes('rapbs')
-        })
-        if (generalPdfs.length > 0) {
-          await loadPDF(generalPdfs[0], true)
-        }
-      }
-    } catch {} finally { setLoading(false) }
   }
 
   const loadPDF = async (fileName: string, skipError = false) => {
@@ -147,8 +147,8 @@ export default function Home() {
       if (!res.ok) { if (skipError) return; throw new Error('Gagal memuat PDF') }
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100)
-      generateSummary(fileName)
-      extractBudget(fileName)
+      // Don't auto-generate summary/budget on load — they're too heavy and crash the server
+      // User can trigger these manually if needed
     } catch (err: any) { if (!skipError) setError(err.message) } finally { setLoading(false) }
   }
 
@@ -161,7 +161,7 @@ export default function Home() {
       if (!res.ok) throw new Error('Gagal mengunggah PDF')
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100); setChatMessages([]); setSummary(null); setBudgetData(null)
-      generateSummary(file.name); extractBudget(file.name)
+      // Don't auto-generate summary/budget on upload — too heavy for server
     } catch (err: any) { setError(err.message) } finally {
       setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ''
     }
