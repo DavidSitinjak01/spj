@@ -115,28 +115,59 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Track which tabs have been loaded to avoid re-fetching
+  const loadedTabsRef = useRef<Set<string>>(new Set())
+
   useEffect(() => {
-    // Stagger API calls to avoid overwhelming the server
+    // Only load core data on initial mount — other data loads when tab is activated
     const init = async () => {
-      // Priority 1: Core data
+      // Core data for Dashboard tab (lightweight — reads from DB, no PDF parsing)
       await Promise.all([loadBKU(), loadRKAS(), loadBKUPajak()])
-      // Priority 2: Supporting data (after a small delay)
-      await new Promise(r => setTimeout(r, 500))
-      await Promise.all([loadSPJ(), loadToko(), loadSekolah(), loadKopRows()])
-      // Priority 3: Secondary data
-      await new Promise(r => setTimeout(r, 500))
-      await Promise.all([loadBPU(), loadBNU()])
+      loadedTabsRef.current.add('dashboard')
     }
     init()
   }, [])
+
+  // Lazy-load data when user switches to a tab
+  useEffect(() => {
+    const loadTabData = async () => {
+      if (loadedTabsRef.current.has(activeTab)) return
+      loadedTabsRef.current.add(activeTab)
+
+      if (activeTab === 'spj') {
+        // SPJ tab needs: SPJ data + master data
+        await Promise.all([loadSPJ(), loadToko(), loadSekolah(), loadKopRows(), loadBPU(), loadBNU()])
+      }
+    }
+    loadTabData()
+  }, [activeTab])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [chatMessages])
   useEffect(() => { setPageInputValue(String(currentPage)) }, [currentPage])
   useEffect(() => { setImageLoaded(false) }, [currentPage])
 
   const loadAvailablePDF = async () => {
+<<<<<<< HEAD
     // Skip auto-loading PDF on startup — it's too heavy and crashes the dev server
     // The BKU/RKAS/BKU Pajak tabs load their own data separately
     setError(null)
+=======
+    setError(null)
+    setLoading(true)
+    try {
+      const listRes = await fetch('/api/pdf/info')
+      if (listRes.ok) {
+        const listData = await listRes.json()
+        const files: string[] = listData.files || []
+        const generalPdfs = files.filter(f => {
+          const lower = f.toLowerCase()
+          return !lower.includes('bku') && !lower.includes('rkas') && !lower.includes('rapbs')
+        })
+        if (generalPdfs.length > 0) {
+          await loadPDF(generalPdfs[0], true)
+        }
+      }
+    } catch {} finally { setLoading(false) }
+>>>>>>> 77b901fd2936310acf3141aa8c07652004215697
   }
 
   const loadPDF = async (fileName: string, skipError = false) => {
@@ -147,8 +178,13 @@ export default function Home() {
       if (!res.ok) { if (skipError) return; throw new Error('Gagal memuat PDF') }
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100)
+<<<<<<< HEAD
       // Don't auto-generate summary/budget on load — they're too heavy and crash the server
       // User can trigger these manually if needed
+=======
+      generateSummary(fileName)
+      extractBudget(fileName)
+>>>>>>> 77b901fd2936310acf3141aa8c07652004215697
     } catch (err: any) { if (!skipError) setError(err.message) } finally { setLoading(false) }
   }
 
@@ -548,9 +584,11 @@ export default function Home() {
     } catch {}
   }
 
-  // Reload SPJ when RKAS or BKU data changes
+  // Reload SPJ when RKAS or BKU data changes AND SPJ tab has been loaded before
   useEffect(() => {
-    if (rkasMonths.length > 0 || bkuMonths.length > 0) { loadSPJ() }
+    if (loadedTabsRef.current.has('spj') && (rkasMonths.length > 0 || bkuMonths.length > 0)) {
+      loadSPJ()
+    }
   }, [rkasMonths, bkuMonths])
 
   const handlePrintDoc = (docType: string) => {

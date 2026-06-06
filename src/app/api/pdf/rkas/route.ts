@@ -486,38 +486,11 @@ async function parseRKASFile(fileName: string, buffer?: Buffer, throwDetails?: b
 // --- API Handlers ---
 
 // GET: List all RKAS files and their parsed data
+// OPTIMIZED: Trust the DB — don't re-parse PDFs from Blob on every request.
+// Data is saved to DB on upload (POST), so GET just reads from DB.
 export async function GET() {
   try {
-    const files = (await getPDFFiles()).filter(f => isRKASFile(f)).sort();
-
-    // Try to get all records from DB first
-    const dbRecords = await getAllRKASFromDB();
-    const dbByFileName = new Map(dbRecords.map(r => [r.fileName, r]));
-
-    const months: RKASMonth[] = [];
-    for (const file of files) {
-      try {
-        // Check DB first to avoid re-parsing
-        const dbRecord = dbByFileName.get(file);
-        if (dbRecord) {
-          months.push(dbRecord);
-          continue;
-        }
-        // No DB record - parse from PDF
-        const data = await parseRKASFile(file);
-        if (data) {
-          months.push(data);
-          // Save to DB for future requests
-          try {
-            await saveRKASToDB(data);
-          } catch (dbErr) {
-            console.error(`Failed to save RKAS ${file} to DB:`, dbErr);
-          }
-        }
-      } catch (err) {
-        console.error(`Error parsing RKAS file ${file}:`, err);
-      }
-    }
+    const months = await getAllRKASFromDB();
 
     // Sort: bulanan by month order first, then tahunan after, both by year
     months.sort((a, b) => {
@@ -533,7 +506,7 @@ export async function GET() {
     const bulanan = months.filter(m => m.tipe === 'bulanan');
     const tahunan = months.filter(m => m.tipe === 'tahunan');
 
-    return NextResponse.json({ months, bulanan, tahunan, files });
+    return NextResponse.json({ months, bulanan, tahunan, files: months.map(m => m.fileName) });
   } catch (error: any) {
     console.error('RKAS list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

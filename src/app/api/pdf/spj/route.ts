@@ -1,16 +1,6 @@
 import { NextResponse } from 'next/server';
-import path from 'path';
-import fs from 'fs';
 import { isServerless } from '@/lib/serverless';
-import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
-import { applyDOMPolyfills } from '@/lib/dom-polyfill';
-import { parseBKUFromText, parseRKASFromText } from '@/lib/pdf-text-parser';
-
-const UPLOAD_DIR = path.join(process.cwd(), 'upload');
-const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
-if (!isServerless()) {
-  try { if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
-}
+import { getAllBKUFromDB, getAllRKASFromDB, getAllBKUPajakFromDB } from '@/lib/services/db-service';
 
 // --- Types ---
 interface SPJItem {
@@ -90,108 +80,6 @@ function extractStandarCode(kodeProgram: string): string {
 
 function compositeKey(kodeProgram: string, kodeRekening: string): string {
   return `${normalizeKode(kodeProgram)}|${normalizeKode(kodeRekening)}`;
-}
-
-// --- Load BKU data from cache (local) or from blob (serverless) ---
-function loadBKUDataLocal(): any[] {
-  const bkuCachePattern = /\.bku\.json$/;
-  const months: any[] = [];
-  if (!fs.existsSync(CACHE_DIR)) return months;
-  const cacheFiles = fs.readdirSync(CACHE_DIR).filter(f => bkuCachePattern.test(f));
-  for (const cf of cacheFiles) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, cf), 'utf-8'));
-      const d = data.data;
-      if (d) months.push(d);
-    } catch {}
-  }
-  months.sort((a, b) => {
-    if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-    return MONTH_ORDER.indexOf(a.bulan) - MONTH_ORDER.indexOf(b.bulan);
-  });
-  return months;
-}
-
-async function loadBKUDataServerless(): Promise<any[]> {
-  try {
-    const allFiles = await getPDFFiles();
-    const bkuFiles = allFiles.filter(f =>
-      f.toLowerCase().includes('bku') && !f.toLowerCase().includes('pajak') && f.toLowerCase().endsWith('.pdf')
-    );
-
-    const months: any[] = [];
-    for (const file of bkuFiles) {
-      try {
-        const info = await processPDF(file);
-        const fullText = info.extractedText.map(p => p.text).join('\n');
-        const data = parseBKUFromText(fullText, file);
-        if (data && data.bulan) months.push(data);
-      } catch (err) {
-        console.error(`Error loading BKU data for ${file} (serverless):`, err);
-      }
-    }
-
-    months.sort((a, b) => {
-      if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-      return MONTH_ORDER.indexOf(a.bulan) - MONTH_ORDER.indexOf(b.bulan);
-    });
-    return months;
-  } catch (err) {
-    console.error('Error loading BKU data (serverless):', err);
-    return [];
-  }
-}
-
-// --- Load RKAS data from cache (local) or from blob (serverless) ---
-function loadRKASDataLocal(): any[] {
-  const rkasCachePattern = /\.rkas\.json$/;
-  const months: any[] = [];
-  if (!fs.existsSync(CACHE_DIR)) return months;
-  const cacheFiles = fs.readdirSync(CACHE_DIR).filter(f => rkasCachePattern.test(f));
-  for (const cf of cacheFiles) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, cf), 'utf-8'));
-      const d = data.data;
-      if (d) months.push(d);
-    } catch {}
-  }
-  months.sort((a, b) => {
-    if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-    if (a.tipe !== b.tipe) return a.tipe === 'tahunan' ? 1 : -1;
-    return MONTH_ORDER.indexOf(a.bulan) - MONTH_ORDER.indexOf(b.bulan);
-  });
-  return months;
-}
-
-async function loadRKASDataServerless(): Promise<any[]> {
-  try {
-    const allFiles = await getPDFFiles();
-    const rkasFiles = allFiles.filter(f =>
-      !f.toLowerCase().includes('bku') && f.toLowerCase().endsWith('.pdf')
-    );
-
-    const months: any[] = [];
-    for (const file of rkasFiles) {
-      try {
-        const info = await processPDF(file);
-        const fullText = info.extractedText.map(p => p.text).join('\n');
-        const data = parseRKASFromText(fullText, file);
-        if (data) months.push(data);
-      } catch (err) {
-        console.error(`Error loading RKAS data for ${file} (serverless):`, err);
-      }
-    }
-
-    months.sort((a, b) => {
-      if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-      if (a.tipe !== b.tipe) return a.tipe === 'tahunan' ? 1 : -1;
-      return MONTH_ORDER.indexOf(a.bulan) - MONTH_ORDER.indexOf(b.bulan);
-    });
-    return months;
-  } catch (err) {
-    console.error('Error loading RKAS data (serverless):', err);
-    return [];
-  }
 }
 
 // --- Aggregate RKAS items by composite key ---
@@ -471,11 +359,12 @@ function buildSPJTahunan(rkasTahunan: any, bkuMonths: any[]): SPJSummary['tahuna
 
 // --- API Handler ---
 export async function GET() {
-  applyDOMPolyfills();
   try {
-    // Load BKU and RKAS data (dual-mode)
-    const rkasMonths = isServerless() ? await loadRKASDataServerless() : loadRKASDataLocal();
-    const bkuMonths = isServerless() ? await loadBKUDataServerless() : loadBKUDataLocal();
+    // Load BKU and RKAS data from DB (fast, no PDF re-parsing!)
+    const [rkasMonths, bkuMonths] = await Promise.all([
+      getAllRKASFromDB(),
+      getAllBKUFromDB(),
+    ]);
 
     const rkasBulanan = rkasMonths.filter((m: any) => m.tipe === 'bulanan');
     const rkasTahunan = rkasMonths.filter((m: any) => m.tipe === 'tahunan');

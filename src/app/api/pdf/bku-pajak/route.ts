@@ -121,66 +121,12 @@ async function parseBKUPajakFile(fileName: string, buffer?: Buffer): Promise<BKU
 // --- API Handlers ---
 
 // GET: List all BKU Pajak files and their parsed data
+// OPTIMIZED: Trust the DB — don't re-parse PDFs from Blob on every request.
+// Data is saved to DB on upload (POST), so GET just reads from DB.
 export async function GET() {
-  applyDOMPolyfills();
   try {
-    if (isServerless()) {
-      const allFiles = await getPDFFiles();
-      const files = allFiles.filter(f => isBKUPajakFile(f)).sort();
-
-      // Try DB first
-      const dbMonths = await getAllBKUPajakFromDB();
-      if (dbMonths.length > 0) {
-        return NextResponse.json({ months: sortMonths(dbMonths), files });
-      }
-
-      // No DB records - parse from blob
-      const months: BKUPajakMonth[] = [];
-      for (const file of files) {
-        try {
-          const data = await parseBKUPajakFile(file);
-          if (data) {
-            months.push(data);
-            await saveBKUPajakToDB(data);
-          }
-        } catch (err) {
-          console.error(`Error parsing BKU Pajak file ${file}:`, err);
-        }
-      }
-
-      return NextResponse.json({ months: sortMonths(months), files });
-    }
-
-    // Local: read from upload dir
-    if (!fs.existsSync(UPLOAD_DIR)) {
-      return NextResponse.json({ months: [], files: [] });
-    }
-
-    const files = fs.readdirSync(UPLOAD_DIR)
-      .filter(f => isBKUPajakFile(f))
-      .sort();
-
-    // Try DB first
     const dbMonths = await getAllBKUPajakFromDB();
-    if (dbMonths.length > 0) {
-      return NextResponse.json({ months: sortMonths(dbMonths), files });
-    }
-
-    // No DB records - parse from files
-    const months: BKUPajakMonth[] = [];
-    for (const file of files) {
-      try {
-        const data = await parseBKUPajakFile(file);
-        if (data) {
-          months.push(data);
-          await saveBKUPajakToDB(data);
-        }
-      } catch (err) {
-        console.error(`Error parsing BKU Pajak file ${file}:`, err);
-      }
-    }
-
-    return NextResponse.json({ months: sortMonths(months), files });
+    return NextResponse.json({ months: sortMonths(dbMonths), files: dbMonths.map(m => m.fileName) });
   } catch (error: any) {
     console.error('BKU Pajak list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

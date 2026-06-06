@@ -1,13 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { isServerless } from '@/lib/serverless';
-import { processPDF, getPDFFiles } from '@/lib/pdf-processor';
-import { applyDOMPolyfills } from '@/lib/dom-polyfill';
-import { parseBKUPajakFromText } from '@/lib/pdf-text-parser';
-import fs from 'fs';
-import path from 'path';
-
-const CACHE_DIR = path.join(process.cwd(), '.pdf-cache');
+import { getAllBKUPajakFromDB } from '@/lib/services/db-service';
 
 // Default empty DataSekolah record (returned when no record exists)
 const defaultDataSekolah = {
@@ -37,96 +30,11 @@ const defaultDataSekolah = {
   updatedAt: null as string | null,
 };
 
-// Interface for BKU Pajak cached data
-interface BKUPajakCachedData {
-  data: {
-    namaSekolah?: string;
-    npsn?: string;
-    alamat?: string;
-    kabupaten?: string;
-    provinsi?: string;
-    kepalaSekolah?: string;
-    bendahara?: string;
-  };
-}
-
 /**
- * Read school data from BKU Pajak cache files (.pdf-cache/*.bku-pajak.json)
- * Returns merged/first available school info from the cached BKU Pajak files.
- * Works in both local and serverless modes.
+ * Read school data from BKU Pajak DB records.
+ * Fast - no PDF re-parsing needed!
  */
-function readSchoolFromBKUCacheLocal(): {
-  namaSekolah: string;
-  npsn: string;
-  alamat: string;
-  kabupaten: string;
-  provinsi: string;
-  kepalaSekolah: string;
-  bendahara: string;
-} {
-  const result = {
-    namaSekolah: '',
-    npsn: '',
-    alamat: '',
-    kabupaten: '',
-    provinsi: '',
-    kepalaSekolah: '',
-    bendahara: '',
-  };
-
-  try {
-    if (!fs.existsSync(CACHE_DIR)) return result;
-
-    const cacheFiles = fs
-      .readdirSync(CACHE_DIR)
-      .filter((f) => f.endsWith('.bku-pajak.json'));
-
-    for (const cacheFile of cacheFiles) {
-      try {
-        const filePath = path.join(CACHE_DIR, cacheFile);
-        const raw = fs.readFileSync(filePath, 'utf-8');
-        const cached: BKUPajakCachedData = JSON.parse(raw);
-
-        if (cached?.data) {
-          // Use first non-empty value found across all cache files
-          if (!result.namaSekolah && cached.data.namaSekolah) {
-            result.namaSekolah = cached.data.namaSekolah;
-          }
-          if (!result.npsn && cached.data.npsn) {
-            result.npsn = cached.data.npsn;
-          }
-          if (!result.alamat && cached.data.alamat) {
-            result.alamat = cached.data.alamat;
-          }
-          if (!result.kabupaten && cached.data.kabupaten) {
-            result.kabupaten = cached.data.kabupaten;
-          }
-          if (!result.provinsi && cached.data.provinsi) {
-            result.provinsi = cached.data.provinsi;
-          }
-          if (!result.kepalaSekolah && cached.data.kepalaSekolah) {
-            result.kepalaSekolah = cached.data.kepalaSekolah;
-          }
-          if (!result.bendahara && cached.data.bendahara) {
-            result.bendahara = cached.data.bendahara;
-          }
-        }
-      } catch {
-        // Skip malformed cache files
-      }
-    }
-  } catch (error) {
-    console.error('Error reading BKU Pajak cache:', error);
-  }
-
-  return result;
-}
-
-/**
- * Read school data from BKU Pajak PDFs in blob storage (serverless mode).
- * Processes each BKU Pajak PDF using processPDF + parseBKUPajakFromText.
- */
-async function readSchoolFromBKUCacheServerless(): Promise<{
+async function readSchoolFromBKUPajakDB(): Promise<{
   namaSekolah: string;
   npsn: string;
   alamat: string;
@@ -146,47 +54,18 @@ async function readSchoolFromBKUCacheServerless(): Promise<{
   };
 
   try {
-    const allFiles = await getPDFFiles();
-    const bkuPajakFiles = allFiles.filter(f =>
-      f.toLowerCase().includes('pajak') && f.toLowerCase().endsWith('.pdf')
-    );
-
-    for (const file of bkuPajakFiles) {
-      try {
-        const info = await processPDF(file);
-        const fullText = info.extractedText.map(p => p.text).join('\n');
-        const data = parseBKUPajakFromText(fullText, file);
-
-        if (data) {
-          // Use first non-empty value found across all files
-          if (!result.namaSekolah && data.namaSekolah) {
-            result.namaSekolah = data.namaSekolah;
-          }
-          if (!result.npsn && data.npsn) {
-            result.npsn = data.npsn;
-          }
-          if (!result.alamat && data.alamat) {
-            result.alamat = data.alamat;
-          }
-          if (!result.kabupaten && data.kabupaten) {
-            result.kabupaten = data.kabupaten;
-          }
-          if (!result.provinsi && data.provinsi) {
-            result.provinsi = data.provinsi;
-          }
-          if (!result.kepalaSekolah && data.kepalaSekolah) {
-            result.kepalaSekolah = data.kepalaSekolah;
-          }
-          if (!result.bendahara && data.bendahara) {
-            result.bendahara = data.bendahara;
-          }
-        }
-      } catch (err) {
-        console.error(`Error reading BKU Pajak file ${file} (serverless):`, err);
-      }
+    const bkuPajakMonths = await getAllBKUPajakFromDB();
+    for (const data of bkuPajakMonths) {
+      if (!result.namaSekolah && data.namaSekolah) result.namaSekolah = data.namaSekolah;
+      if (!result.npsn && data.npsn) result.npsn = data.npsn;
+      if (!result.alamat && data.alamat) result.alamat = data.alamat;
+      if (!result.kabupaten && data.kabupaten) result.kabupaten = data.kabupaten;
+      if (!result.provinsi && data.provinsi) result.provinsi = data.provinsi;
+      if (!result.kepalaSekolah && data.kepalaSekolah) result.kepalaSekolah = data.kepalaSekolah;
+      if (!result.bendahara && data.bendahara) result.bendahara = data.bendahara;
     }
   } catch (error) {
-    console.error('Error reading BKU Pajak from blob:', error);
+    console.error('Error reading BKU Pajak from DB:', error);
   }
 
   return result;
@@ -194,14 +73,13 @@ async function readSchoolFromBKUCacheServerless(): Promise<{
 
 // GET: Retrieve the single DataSekolah record
 // If none exists, return a default empty record (no auto-creation)
-// Query param ?initFromBKU=true will merge BKU Pajak cached data into the default
+// Query param ?initFromBKU=true will merge BKU Pajak DB data into the default
 export async function GET(request: Request) {
-  applyDOMPolyfills();
   try {
     const { searchParams } = new URL(request.url);
     const initFromBKU = searchParams.get('initFromBKU') === 'true';
 
-    // Fetch the first (and only) DataSekolah record (include logo URLs since they're needed for KOP display)
+    // Fetch the first (and only) DataSekolah record
     const record = await db.dataSekolah.findFirst();
 
     if (record) {
@@ -212,10 +90,8 @@ export async function GET(request: Request) {
     let data = { ...defaultDataSekolah };
 
     if (initFromBKU) {
-      // Attempt to populate from BKU Pajak cached data (dual-mode)
-      const bkuData = isServerless()
-        ? await readSchoolFromBKUCacheServerless()
-        : readSchoolFromBKUCacheLocal();
+      // Populate from BKU Pajak DB data (fast, no PDF re-parsing)
+      const bkuData = await readSchoolFromBKUPajakDB();
       data = {
         ...data,
         ...bkuData,
@@ -233,9 +109,7 @@ export async function GET(request: Request) {
 }
 
 // POST: Create or update (upsert) the single DataSekolah record
-// Since there should only be one record, always upsert to the first record found
 export async function POST(request: Request) {
-  applyDOMPolyfills();
   try {
     const body = await request.json();
 
@@ -265,7 +139,7 @@ export async function POST(request: Request) {
     if (typeof body.garisBawahStyle === 'string') fields.garisBawahStyle = body.garisBawahStyle;
     if (typeof body.garisBawahJarak === 'number') fields.garisBawahJarak = body.garisBawahJarak;
 
-    // Find the existing record (should be at most one) — exclude large logo base64 from the lookup
+    // Find the existing record (should be at most one)
     const existing = await db.dataSekolah.findFirst({
       select: { id: true },
     });
@@ -277,6 +151,7 @@ export async function POST(request: Request) {
       id: true, namaSekolah: true, npsn: true, alamat: true, kabupaten: true, provinsi: true,
       kepalaSekolah: true, nipKepala: true, bendahara: true, nipBendahara: true,
       pengurusBarang: true, nipPengurus: true, penerimaBarang: true, nipPenerima: true,
+      logoKiriUrl: true, logoKananUrl: true,
       logoKiriLebar: true, logoKiriTinggi: true, logoKananLebar: true, logoKananTinggi: true,
       garisBawahStyle: true, garisBawahJarak: true,
       createdAt: true, updatedAt: true,

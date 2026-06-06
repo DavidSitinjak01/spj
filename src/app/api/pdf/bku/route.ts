@@ -223,92 +223,20 @@ function writeFileLocal(filePath: string, buffer: Buffer): Promise<void> {
 }
 
 // GET: List all BKU files and their parsed data
+// OPTIMIZED: Trust the DB — don't re-parse PDFs from Blob on every request.
+// Data is saved to DB on upload (POST), so GET just reads from DB.
 export async function GET() {
-  applyDOMPolyfills();
   try {
-    if (isServerless()) {
-      const allFiles = await getPDFFiles();
-      const files = allFiles.filter(f => isBKUFile(f)).sort();
-
-      // Try DB first - bulk fetch
-      const dbMonths = await getAllBKUFromDB();
-      const dbMap = new Map(dbMonths.map(m => [m.fileName, m]));
-
-      const months: BKUMonth[] = [];
-      const parseErrors: string[] = [];
-      for (const file of files) {
-        const dbRecord = dbMap.get(file);
-        if (dbRecord) {
-          months.push(dbRecord);
-          continue;
-        }
-        // No DB record - parse from blob
-        try {
-          const data = await parseBKUFile(file);
-          if (data) {
-            months.push(data);
-            try {
-              await saveBKUToDB(data);
-            } catch (dbErr: any) {
-              console.error(`Failed to cache BKU ${file} to database:`, dbErr?.message);
-              parseErrors.push(`DB save failed: ${dbErr?.message}`);
-            }
-          } else {
-            parseErrors.push(`parseBKUFile returned null for ${file}`);
-          }
-        } catch (err: any) {
-          console.error(`Error parsing BKU file ${file}:`, err);
-        }
-      }
-
-      // Sort by month order
-      months.sort((a, b) => {
-        if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
-        return MONTH_ORDER.indexOf(a.bulan as typeof MONTH_ORDER[number]) - MONTH_ORDER.indexOf(b.bulan as typeof MONTH_ORDER[number]);
-      });
-
-      return NextResponse.json({ months, files, parseErrors: parseErrors.length > 0 ? parseErrors : undefined });
-    }
-
-    // Local: read from upload dir
-    if (!fs.existsSync(UPLOAD_DIR)) {
-      return NextResponse.json({ months: [], files: [] });
-    }
-
-    const files = fs.readdirSync(UPLOAD_DIR)
-      .filter(f => isBKUFile(f))
-      .sort();
-
-    // Try DB first - bulk fetch
+    // Always read from DB — data is persisted on upload (POST)
     const dbMonths = await getAllBKUFromDB();
-    const dbMap = new Map(dbMonths.map(m => [m.fileName, m]));
-
-    const months: BKUMonth[] = [];
-    for (const file of files) {
-      const dbRecord = dbMap.get(file);
-      if (dbRecord) {
-        months.push(dbRecord);
-        continue;
-      }
-      // No DB record - parse from file
-      const data = await parseBKUFile(file);
-      if (data) {
-        months.push(data);
-        try {
-          await saveBKUToDB(data);
-        } catch (dbErr) {
-          console.error(`Failed to cache BKU ${file} to database:`, dbErr);
-        }
-      }
-    }
 
     // Sort by month order
-    months.sort((a, b) => {
+    const months = dbMonths.sort((a, b) => {
       if (a.tahun !== b.tahun) return a.tahun.localeCompare(b.tahun);
       return MONTH_ORDER.indexOf(a.bulan as typeof MONTH_ORDER[number]) - MONTH_ORDER.indexOf(b.bulan as typeof MONTH_ORDER[number]);
     });
 
-    return NextResponse.json({ months, files });
+    return NextResponse.json({ months, files: months.map(m => m.fileName) });
   } catch (error: any) {
     console.error('BKU list error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
