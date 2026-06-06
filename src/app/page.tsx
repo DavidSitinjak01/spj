@@ -146,28 +146,9 @@ export default function Home() {
   useEffect(() => { setImageLoaded(false) }, [currentPage])
 
   const loadAvailablePDF = async () => {
-<<<<<<< HEAD
     // Skip auto-loading PDF on startup — it's too heavy and crashes the dev server
     // The BKU/RKAS/BKU Pajak tabs load their own data separately
     setError(null)
-=======
-    setError(null)
-    setLoading(true)
-    try {
-      const listRes = await fetch('/api/pdf/info')
-      if (listRes.ok) {
-        const listData = await listRes.json()
-        const files: string[] = listData.files || []
-        const generalPdfs = files.filter(f => {
-          const lower = f.toLowerCase()
-          return !lower.includes('bku') && !lower.includes('rkas') && !lower.includes('rapbs')
-        })
-        if (generalPdfs.length > 0) {
-          await loadPDF(generalPdfs[0], true)
-        }
-      }
-    } catch {} finally { setLoading(false) }
->>>>>>> 77b901fd2936310acf3141aa8c07652004215697
   }
 
   const loadPDF = async (fileName: string, skipError = false) => {
@@ -178,13 +159,8 @@ export default function Home() {
       if (!res.ok) { if (skipError) return; throw new Error('Gagal memuat PDF') }
       const data = await res.json()
       setPdfData(data); setCurrentPage(1); setZoom(100)
-<<<<<<< HEAD
       // Don't auto-generate summary/budget on load — they're too heavy and crash the server
       // User can trigger these manually if needed
-=======
-      generateSummary(fileName)
-      extractBudget(fileName)
->>>>>>> 77b901fd2936310acf3141aa8c07652004215697
     } catch (err: any) { if (!skipError) setError(err.message) } finally { setLoading(false) }
   }
 
